@@ -1,0 +1,21 @@
+# Build output
+build/
+
+# NuGet packages
+packages/
+
+# IDE / VS
+.vs/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Planning files (local tracking)
+.planning/
+
+# OS
+Thumbs.db
+Desktop.ini
