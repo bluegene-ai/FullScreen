@@ -12,6 +12,7 @@ packages/
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+.codebase-memory/
 
 # Planning files (local tracking)
 .planning/
