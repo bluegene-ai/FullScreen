@@ -31,6 +31,12 @@ void NavigateTo(const std::wstring& url);
 // Show an HTML message in the WebView (e.g., "page unreachable")
 void ShowMessage(const std::wstring& htmlMessage);
 
+// Reload the current page (F5-like).
+void Reload();
+
+// Hard reload: clear the browser cache, then reload (Ctrl+F5-like).
+void ReloadIgnoringCache();
+
 // Set zoom factor (e.g., 1.0 = 100%)
 void SetZoom(double factor);
 

@@ -123,20 +123,23 @@ static DWORD WINAPI MonitorThreadProc(LPVOID lpParam)
 {
     const int myGen = static_cast<int>(reinterpret_cast<intptr_t>(lpParam));
     while (g_running && g_generation.load() == myGen) {
-        // Wait for interval or stop signal
-        for (int i = 0; i < 300 && g_running && g_generation.load() == myGen; ++i) {
-            Sleep(100);
-        }
-        if (!g_running || g_generation.load() != myGen) break;
-
+        // Probe immediately on start, then every ~10s.
         bool reachable = CheckUrlReachable(g_url);
 
         bool prevUnreachable = g_unreachable.exchange(!reachable);
 
-        // Notify if state changed
-        if (reachable != !prevUnreachable && g_callback) {
+        // Report on transitions; additionally keep reporting while unreachable
+        // so the UI re-asserts the message if it was overwritten (e.g. by an
+        // auto-refresh). ShowMessage is idempotent while the message is visible.
+        if (g_callback && (reachable != !prevUnreachable || !reachable)) {
             g_callback(reachable);
         }
+
+        // Wait for interval or stop signal (~10s)
+        for (int i = 0; i < 100 && g_running && g_generation.load() == myGen; ++i) {
+            Sleep(100);
+        }
+        if (!g_running || g_generation.load() != myGen) break;
     }
     return 0;
 }

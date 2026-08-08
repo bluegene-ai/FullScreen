@@ -381,6 +381,17 @@ static std::wstring StripSignatureField(const std::wstring& json)
 
 } // namespace
 
+bool CheckServerReachable(const std::wstring& baseUrl)
+{
+    std::wstring url = JoinUrl(baseUrl, L"/health");
+    DWORD code = 0;
+    std::wstring response;
+    if (!HttpJsonRequest(L"GET", url, L"", {}, code, response)) {
+        return false;
+    }
+    return code == 200 && response.find(L"\"ok\"") != std::wstring::npos;
+}
+
 RegisterResult RegisterDevice(const std::wstring& baseUrl,
                               const std::wstring& deviceId,
                               const std::wstring& registerCode,

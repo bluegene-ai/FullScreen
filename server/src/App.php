@@ -147,7 +147,10 @@ final class App
         $response = [
             'ok' => true,
             'revision' => $merged['revision'],
-            'config' => $merged['config'],
+            // (object): ensure an empty merged config serializes as {} not [].
+            // The client's parser only accepts a JSON object for "config" and
+            // rejects "config":[] with "invalid response".
+            'config' => (object)$merged['config'],
             'commands' => $commands,
             'serverTime' => time(),
         ];

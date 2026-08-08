@@ -42,6 +42,12 @@ static std::mutex                     g_mutex;
 // message would be immediately overridden by a retry navigation.
 static std::atomic<bool>              g_showingMessage{false};
 
+// Last message shown and whether the message page is currently visible.
+// Makes ShowMessage idempotent and lets the monitor re-show the message if it
+// got overwritten (e.g. by an auto-refresh reload of the target URL).
+static std::wstring                   g_messageText;
+static std::atomic<bool>              g_messageVisible{false};
+
 // Pixel shift state
 static int g_pixelShiftIndex = 0;
 static bool g_pixelShiftActive = false;
@@ -284,6 +290,9 @@ static void RegisterEventHandlers()
                     return S_OK;
                 }
 
+                // A real page navigation completed; the message page is gone.
+                g_messageVisible.store(false);
+
                 UrlMonitor::OnNavigationCompleted(success != FALSE);
 
                 if (g_navCallback) {
@@ -384,11 +393,57 @@ void NavigateTo(const std::wstring& url)
 // ============================================================
 void ShowMessage(const std::wstring& htmlMessage)
 {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_messageVisible.load() && g_messageText == htmlMessage) {
+            return; // already showing this message; keep it (no flicker)
+        }
+        g_messageText = htmlMessage;
+    }
+    g_messageVisible.store(true);
+
     std::wstring html = BuildMessageHtml(htmlMessage);
 
     if (g_webView && g_webViewReady) {
         g_showingMessage = true;
         g_webView->NavigateToString(html.c_str());
+    }
+}
+
+// ============================================================
+// Reload / hard reload (F5 / Ctrl+F5)
+// ============================================================
+void Reload()
+{
+    if (g_webView && g_webViewReady) {
+        g_webView->Reload();
+    }
+}
+
+void ReloadIgnoringCache()
+{
+    if (!g_webView || !g_webViewReady) return;
+
+    ComPtr<ICoreWebView2_13> wv13;
+    ComPtr<ICoreWebView2Profile> profile;
+    ComPtr<ICoreWebView2Profile2> profile2;
+    if (SUCCEEDED(g_webView.As(&wv13)) &&
+        SUCCEEDED(wv13->get_Profile(&profile)) &&
+        SUCCEEDED(profile.As(&profile2))) {
+        profile2->ClearBrowsingData(
+            (COREWEBVIEW2_BROWSING_DATA_KINDS)
+                (COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE |
+                 COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE),
+            Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>(
+                [](HRESULT) -> HRESULT {
+                    // Cache cleared: reload the current page.
+                    if (g_webView && g_webViewReady) {
+                        g_webView->Reload();
+                    }
+                    return S_OK;
+                }).Get());
+    } else {
+        g_webView->Reload();
     }
 }
 
@@ -525,7 +580,8 @@ void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec, int da
 static void DoAutoRefresh()
 {
     // Only refresh if we're showing the target URL (not the unreachable message)
-    if (g_currentUrl == g_refreshUrl && g_webView && g_webViewReady) {
+    if (g_currentUrl == g_refreshUrl && !g_messageVisible.load() &&
+        g_webView && g_webViewReady) {
         g_webView->Reload();
     }
 }

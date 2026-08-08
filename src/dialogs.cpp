@@ -5,6 +5,7 @@
 #include "resource.h"
 #include "config_manager.h"
 #include "crypto.h"
+#include "remote_config_client.h"
 #include <Windows.h>
 #include <CommCtrl.h>
 #include <winhttp.h>
@@ -291,6 +292,18 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
 
                 // Save to file
                 if (ConfigManager::SaveConfig(*dlgData->config, *dlgData->plainPassword)) {
+                    // Non-blocking preflight: warn if the remote server is
+                    // unreachable, but still allow the save (offline deploy).
+                    // Remote eligibility is re-evaluated at runtime.
+                    if (dlgData->config->remoteEnabled &&
+                        !RemoteConfigClient::CheckServerReachable(dlgData->config->remoteBaseUrl)) {
+                        std::wstring warnMsg = L"Remote configuration server is not reachable:\n\n";
+                        warnMsg += dlgData->config->remoteBaseUrl;
+                        warnMsg += L"\n\nThe configuration was saved; local settings remain active.\n"
+                                   L"Remote sync will be re-checked when the program runs.";
+                        MessageBoxW(hDlg, warnMsg.c_str(), AppConstants::APP_NAME,
+                                    MB_OK | MB_ICONWARNING);
+                    }
                     dlgData->saved = true;
                     EndDialog(hDlg, IDOK);
                 } else {
@@ -528,6 +541,7 @@ namespace {
 struct RegisterDialogData {
     std::wstring* registerCode;
     bool accepted;
+    bool allowCancel;
 };
 
 static INT_PTR CALLBACK RegisterDialogProcImpl(HWND hDlg, UINT msg,
@@ -540,6 +554,10 @@ static INT_PTR CALLBACK RegisterDialogProcImpl(HWND hDlg, UINT msg,
         dlgData = reinterpret_cast<RegisterDialogData*>(lParam);
         dlgData->accepted = false;
         SendMessageW(GetDlgItem(hDlg, IDC_REGISTER_CODE), EM_SETLIMITTEXT, 255, 0);
+        if (!dlgData->allowCancel) {
+            // Mandatory registration: hide Cancel, ignore Esc / title-bar close.
+            ShowWindow(GetDlgItem(hDlg, IDCANCEL), SW_HIDE);
+        }
         CenterDialog(hDlg, GetParent(hDlg));
         SetWindowPos(hDlg, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         SetForegroundWindow(hDlg);
@@ -568,9 +586,18 @@ static INT_PTR CALLBACK RegisterDialogProcImpl(HWND hDlg, UINT msg,
             return TRUE;
 
         case IDCANCEL:
+            if (!dlgData->allowCancel) {
+                return TRUE; // mandatory registration: cancel is not allowed
+            }
             dlgData->accepted = false;
             EndDialog(hDlg, IDCANCEL);
             return TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        if (!dlgData->allowCancel) {
+            return TRUE; // swallow title-bar close during mandatory registration
         }
         break;
     }
@@ -625,11 +652,13 @@ int ShowMenuDialog(HINSTANCE hInstance, HWND hParent)
 }
 
 bool ShowRegisterCodeDialog(HINSTANCE hInstance, HWND hParent,
+                            bool allowCancel,
                             std::wstring& registerCode)
 {
     RegisterDialogData data;
     data.registerCode = &registerCode;
     data.accepted = false;
+    data.allowCancel = allowCancel;
 
     DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_REGISTER_DIALOG),
                     hParent, RegisterDialogProcImpl,

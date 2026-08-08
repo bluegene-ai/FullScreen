@@ -37,6 +37,10 @@ struct AckResult {
     std::wstring error;
 };
 
+// Returns true if the server base URL is syntactically valid AND answers
+// GET /health with HTTP 200. Used to gate registration on a usable URL.
+bool CheckServerReachable(const std::wstring& baseUrl);
+
 // POST /api/v1/device/register
 RegisterResult RegisterDevice(const std::wstring& baseUrl,
                              const std::wstring& deviceId,

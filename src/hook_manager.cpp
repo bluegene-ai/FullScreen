@@ -11,6 +11,7 @@ namespace HookManager {
 static HHOOK g_hook = nullptr;
 static HHOOK g_mouseHook = nullptr;
 static PasswordCallback g_callback;
+static RefreshCallback g_refreshCallback;
 static std::mutex g_mutex;
 
 // Kiosk lock: when true, all keyboard (except ESC / Alt+F4 / Alt+Tab) and all
@@ -24,6 +25,7 @@ static std::atomic<bool> g_inputLocked{true};
 static DWORD g_lastVerifyTick = 0;
 static bool g_escArmed = false;
 static bool g_altF4Armed = false;
+static bool g_f5Armed = false;
 
 // ============================================================
 // True while our fullscreen main window is the foreground window.
@@ -85,6 +87,13 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
                     return 1;
                 }
 
+                // F5 / Ctrl+F5: refresh (executed on keyup). Swallowed here so
+                // it never reaches the page; we drive the reload ourselves.
+                if (kb->vkCode == VK_F5) {
+                    g_f5Armed = true;
+                    return 1;
+                }
+
                 // Alt+Tab: system task switching. A low-level hook cannot stop
                 // it; pass it through so it keeps working.
                 if (kb->vkCode == VK_TAB && alt && !ctrl) {
@@ -117,6 +126,14 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
                     g_escArmed = false;
                     if (g_callback) g_callback();
                     g_lastVerifyTick = GetTickCount();
+                    return 1;
+                }
+
+                if (kb->vkCode == VK_F5 && g_f5Armed) {
+                    g_f5Armed = false;
+                    if (g_refreshCallback) {
+                        g_refreshCallback(ctrl);
+                    }
                     return 1;
                 }
 
@@ -187,7 +204,15 @@ void UninstallHook()
     }
     g_escArmed = false;
     g_altF4Armed = false;
+    g_f5Armed = false;
     g_callback = nullptr;
+    g_refreshCallback = nullptr;
+}
+
+// Register the F5 / Ctrl+F5 refresh handler (wired by main.cpp). May be null.
+void SetRefreshCallback(RefreshCallback cb)
+{
+    g_refreshCallback = std::move(cb);
 }
 
 // Temporarily allow input while a password/menu/settings dialog is open.

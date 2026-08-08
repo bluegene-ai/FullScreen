@@ -26,8 +26,9 @@ bool ShowPasswordDialog(HINSTANCE hInstance, HWND hParent,
 int ShowMenuDialog(HINSTANCE hInstance, HWND hParent);
 
 // Show the one-time device registration code dialog.
+// allowCancel=false makes registration mandatory (Cancel hidden, Esc/close ignored).
 // Returns true when user confirmed input; registerCode receives trimmed text.
-bool ShowRegisterCodeDialog(HINSTANCE hInstance, HWND hParent,
+bool ShowRegisterCodeDialog(HINSTANCE hInstance, HWND hParent, bool allowCancel,
                             std::wstring& registerCode);
 
 } // namespace Dialogs

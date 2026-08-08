@@ -110,13 +110,16 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
             CoUninitialize();
             return 0;
         }
-        g_state.remoteSyncAllowed = false;
     } else {
         g_state.currentPassword = Crypto::Decrypt(g_state.config.encryptedPassword);
-        g_state.remoteSyncAllowed = true;
     }
 
-    if (g_state.remoteSyncAllowed && g_state.config.remoteEnabled) {
+    // Remote-sync eligibility is evaluated once in EnsureRemoteRegistration():
+    // 1) remote config on? -> 2) remote URL usable? -> 3) already registered?
+    // Honor the saved config on first-time setup instead of forcing it off.
+    g_state.remoteSyncAllowed = g_state.config.remoteEnabled;
+
+    if (g_state.remoteSyncAllowed) {
         ConfigManager::LoadRemoteToken(g_state.remoteToken);
         ConfigManager::LoadConsumedCommandIds(g_state.consumedCommandIds);
         EnsureRemoteRegistration();
@@ -197,6 +200,19 @@ static bool RunFullscreenMode()
     if (!HookManager::InstallHook(OnHotkeyPressed)) {
         // Non-fatal: continue without hook (degraded mode)
     }
+
+    // F5 = reload, Ctrl+F5 = hard reload (clear cache). While the
+    // "unreachable" message page is shown, refresh means "retry the page".
+    HookManager::SetRefreshCallback([](bool hardRefresh) {
+        if (g_state.exiting || g_state.dialogActive) return;
+        if (g_state.isUnreachable) {
+            WebViewWindow::NavigateTo(g_state.config.url);
+        } else if (hardRefresh) {
+            WebViewWindow::ReloadIgnoringCache();
+        } else {
+            WebViewWindow::Reload();
+        }
+    });
 
     // --- Navigate to target URL ---
     WebViewWindow::NavigateTo(g_state.config.url);
@@ -314,16 +330,18 @@ static void OnHotkeyPressed()
                     KillTimer(g_state.hMainWnd, TIMER_REMOTE_CONFIG);
                 }
 
-                if (g_state.config.remoteEnabled && g_state.config.remoteBaseUrl[0] != L'\0') {
-                    g_state.remoteSyncAllowed = true;
+                if (g_state.config.remoteEnabled) {
                     ConfigManager::LoadRemoteToken(g_state.remoteToken);
                     ConfigManager::LoadConsumedCommandIds(g_state.consumedCommandIds);
-                    PerformRemoteSync(false);
-                    if (!g_state.lastRemoteError.empty()) {
-                        std::wstring msg = L"Remote configuration check failed. Local settings remain active.\n\nReason: ";
-                        msg += g_state.lastRemoteError;
-                        MessageBoxW(g_state.hMainWnd, msg.c_str(),
-                                    AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
+                    // Same evaluation chain as startup: URL usable, then registered.
+                    if (EnsureRemoteRegistration()) {
+                        PerformRemoteSync(false);
+                        if (!g_state.lastRemoteError.empty()) {
+                            std::wstring msg = L"Remote configuration check failed. Local settings remain active.\n\nReason: ";
+                            msg += g_state.lastRemoteError;
+                            MessageBoxW(g_state.hMainWnd, msg.c_str(),
+                                        AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
+                        }
                     }
                 } else {
                     g_state.remoteSyncAllowed = false;
@@ -371,12 +389,35 @@ static void ApplyConfigRuntime(const AppConfig& cfg)
 // ============================================================
 // Remote config helpers
 // ============================================================
+// Remote registration state machine. Rungs in order:
+//   1. remote config enabled?     -> no: leave disabled, never prompt
+//   2. remote URL usable?         -> no: warn + disable remote (saved)
+//   3. already registered (token)?-> yes: no prompt
+//   4. else: mandatory registration dialog (cancel disabled)
 static bool EnsureRemoteRegistration()
 {
-    if (!g_state.remoteSyncAllowed || !g_state.config.remoteEnabled || g_state.config.remoteBaseUrl[0] == L'\0') {
+    // Rung 1: remote config on?
+    if (!g_state.config.remoteEnabled) {
+        g_state.remoteSyncAllowed = false;
         return false;
     }
 
+    // Rung 2: remote URL usable? (syntax + reachability)
+    if (!RemoteConfigClient::CheckServerReachable(g_state.config.remoteBaseUrl)) {
+        std::wstring msg = L"Remote configuration URL is not reachable:\n\n";
+        msg += g_state.config.remoteBaseUrl;
+        msg += L"\n\nRemote configuration has been disabled. Local settings remain active.";
+        MessageBoxW(g_state.hMainWnd, msg.c_str(),
+                    AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
+        g_state.config.remoteEnabled = false;
+        ConfigManager::SaveConfig(g_state.config, g_state.currentPassword);
+        g_state.remoteSyncAllowed = false;
+        return false;
+    }
+
+    g_state.remoteSyncAllowed = true;
+
+    // Ensure a stable device id before registration.
     if (g_state.config.deviceId[0] == L'\0') {
         GUID guid = {};
         if (CoCreateGuid(&guid) == S_OK) {
@@ -390,37 +431,48 @@ static bool EnsureRemoteRegistration()
         }
     }
 
+    // Rung 3: already registered?
     if (!g_state.remoteToken.empty()) {
         return true;
     }
 
-    std::wstring registerCode;
-    bool accepted = Dialogs::ShowRegisterCodeDialog(g_state.hInstance, nullptr, registerCode);
-    if (!accepted) {
-        return false;
-    }
+    // Rung 4: mandatory registration. The dialog cannot be cancelled, so a
+    // failed attempt re-prompts until it succeeds.
+    // ponytail: a permanently-down-but-reachable server or a bad code can block
+    // the device on this loop; the escape hatch is disabling remote via the
+    // settings dialog (password-protected).
+    for (;;) {
+        std::wstring registerCode;
+        bool accepted = Dialogs::ShowRegisterCodeDialog(
+            g_state.hInstance, g_state.hMainWnd, false, registerCode);
+        if (!accepted) {
+            // Unreachable when cancel is disabled; defensive fallback.
+            return false;
+        }
 
-    auto result = RemoteConfigClient::RegisterDevice(g_state.config.remoteBaseUrl,
-                                                     g_state.config.deviceId,
-                                                     registerCode,
-                                                     L"1.0.0");
-    if (!result.ok) {
+        auto result = RemoteConfigClient::RegisterDevice(g_state.config.remoteBaseUrl,
+                                                         g_state.config.deviceId,
+                                                         registerCode,
+                                                         L"1.0.0");
+        if (result.ok) {
+            g_state.remoteToken = std::move(result.deviceToken);
+            g_state.config.pollBaseSec = result.pollBaseSec;
+            g_state.config.pollJitterSec = result.pollJitterSec;
+            g_state.config.pollMaxBackoffSec = result.pollMaxBackoffSec;
+            ConfigManager::SaveRemoteToken(g_state.remoteToken);
+            ConfigManager::SaveConfig(g_state.config, g_state.currentPassword);
+            return true;
+        }
+
         std::wstring msg = L"Device registration failed.";
         if (!result.error.empty()) {
             msg += L"\n\nError: ";
             msg += result.error;
         }
-        MessageBoxW(nullptr, msg.c_str(), AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
-        return false;
+        MessageBoxW(g_state.hMainWnd, msg.c_str(),
+                    AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
+        // Loop: registration is mandatory, keep prompting.
     }
-
-    g_state.remoteToken = std::move(result.deviceToken);
-    g_state.config.pollBaseSec = result.pollBaseSec;
-    g_state.config.pollJitterSec = result.pollJitterSec;
-    g_state.config.pollMaxBackoffSec = result.pollMaxBackoffSec;
-    ConfigManager::SaveRemoteToken(g_state.remoteToken);
-    ConfigManager::SaveConfig(g_state.config, g_state.currentPassword);
-    return true;
 }
 
 static void ScheduleNextRemotePoll()
@@ -575,8 +627,11 @@ static void OnUrlReachabilityChanged(bool reachable)
 {
     if (g_state.exiting) return;
 
-    if (!reachable && !g_state.isUnreachable) {
+    if (!reachable) {
         g_state.isUnreachable = true;
+        // Re-assert on every notification (not just the transition) so the
+        // message reappears if it was overwritten (e.g. by an auto-refresh).
+        // ShowMessage is idempotent while the message page is still visible.
         WebViewWindow::ShowMessage(g_state.config.unreachableMsg);
     } else if (reachable && g_state.isUnreachable) {
         g_state.isUnreachable = false;
