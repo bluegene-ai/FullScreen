@@ -1,0 +1,16 @@
+{
+  "scope": "global",
+  "scopeId": "",
+  "operator": "ops-admin",
+  "note": "initial global publish",
+  "config": {
+    "url": "https://example.com/dashboard",
+    "zoomPercent": 110,
+    "refreshMode": 1,
+    "refreshIntervalSec": 60,
+    "refreshDailyMin": 0,
+    "burnInPrevention": true,
+    "unreachableMsg": "网络异常，请稍后重试",
+    "allowRemotePasswordUpdate": true
+  }
+}

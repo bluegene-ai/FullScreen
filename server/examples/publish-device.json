@@ -1,0 +1,9 @@
+{
+  "scope": "device",
+  "scopeId": "dev-001",
+  "operator": "ops-admin",
+  "note": "device specific URL",
+  "config": {
+    "url": "https://example.com/device-001"
+  }
+}

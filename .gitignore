@@ -17,6 +17,13 @@ packages/
 # Planning files (local tracking)
 .planning/
 
+# Server local data & secrets — auto-generated on startup (admin_auth, server_secret,
+# device token hashes, audit logs, config revisions...). Never commit.
+server/storage/*
+!server/storage/.gitkeep
+server/runtime/*
+!server/runtime/.gitkeep
+
 # OS
 Thumbs.db
 Desktop.ini

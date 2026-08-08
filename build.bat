@@ -15,10 +15,34 @@ setlocal enabledelayedexpansion
 
 REM --- Find MSVC environment ---
 if not defined DevEnvDir (
+    set VCVARS64=
+    for %%R in ("%ProgramFiles%" "D:\Program Files") do (
+        for %%D in (Community Professional Enterprise BuildTools) do (
+            if exist "%%~R\Microsoft Visual Studio\2022\%%D\VC\Auxiliary\Build\vcvars64.bat" (
+                set VCVARS64=%%~R\Microsoft Visual Studio\2022\%%D\VC\Auxiliary\Build\vcvars64.bat
+                goto :init_msvc
+            )
+        )
+    )
+
     echo [ERROR] Please run from a Visual Studio Developer Command Prompt.
     echo         e.g. "x64 Native Tools Command Prompt for VS 2022"
+    echo         Or install Visual Studio 2022 C++ tools under %%ProgramFiles%%\Microsoft Visual Studio\2022\*
     exit /b 1
 )
+
+goto :msvc_ready
+
+:init_msvc
+echo [INFO] Initializing Visual Studio toolchain...
+call "%VCVARS64%"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to initialize MSVC environment from:
+    echo         %VCVARS64%
+    exit /b 1
+)
+
+:msvc_ready
 
 set SRC_DIR=%~dp0src
 set OUT_DIR=%~dp0build
