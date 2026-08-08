@@ -31,7 +31,7 @@ jobs:
       - name: Package (zip)
         shell: pwsh
         run: |
-          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "nightly" }
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "nightly-$(Get-Date -Format 'yyyy.MM.dd')" }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\FullScreenBrowser.exe dist\
           Compress-Archive -Path dist\FullScreenBrowser.exe -DestinationPath "dist\FullScreenBrowser-$tag.zip"
@@ -62,13 +62,14 @@ jobs:
         if: github.ref_type == 'branch'
         shell: pwsh
         run: |
-          # Recreate the nightly release on every successful build (delete + create).
-          gh release delete nightly --yes --repo "${{ github.repository }}" 2>$null
-          gh release create nightly `
+          # Recreate the dated nightly release on every successful build.
+          $ver = "nightly-$(Get-Date -Format 'yyyy.MM.dd')"
+          gh release delete $ver --yes --repo "${{ github.repository }}" 2>$null
+          gh release create $ver `
             dist\FullScreenBrowser.exe `
-            dist\FullScreenBrowser-nightly.zip `
+            "dist\FullScreenBrowser-$ver.zip" `
             --repo "${{ github.repository }}" `
-            --title "Nightly build ${{ github.sha }}" `
+            --title "Nightly $ver (${{ github.sha }})" `
             --notes "Latest automatic build from '${{ github.ref_name }}' at ${{ github.sha }}." `
             --prerelease
         env:
