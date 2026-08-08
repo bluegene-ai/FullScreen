@@ -28,13 +28,39 @@ jobs:
           call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
           build.bat
 
+      - name: Compute version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}"
+          } else {
+            # V<yyyy.MM.dd> plus a/b/c... suffix for multiple same-day builds.
+            $base = "V" + (Get-Date -Format 'yyyy.MM.dd')
+            $tags = @()
+            try {
+              $tags = @(gh release list --repo "${{ github.repository }}" --limit 100 --json tagName 2>$null | ConvertFrom-Json | ForEach-Object { $_.tagName })
+            } catch { $tags = @() }
+            $idx = 0
+            foreach ($t in $tags) {
+              if ($t -eq $base) { $idx = [Math]::Max($idx, 1) }
+              elseif ($t -like "$base?") {
+                $n = [int][char]($t[$base.Length]) - 96
+                $idx = [Math]::Max($idx, $n)
+              }
+            }
+            $ver = if ($idx -eq 0) { $base } else { $base + [char](96 + $idx) }
+          }
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Output "Release version: $ver"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Package (zip)
         shell: pwsh
         run: |
-          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "nightly-$(Get-Date -Format 'yyyy.MM.dd')" }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\FullScreenBrowser.exe dist\
-          Compress-Archive -Path dist\FullScreenBrowser.exe -DestinationPath "dist\FullScreenBrowser-$tag.zip"
+          Compress-Archive -Path dist\FullScreenBrowser.exe -DestinationPath "dist\FullScreenBrowser-$env:VERSION.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -45,32 +71,14 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-      - name: Create GitHub Release (tagged)
-        if: github.ref_type == 'tag'
+      - name: Publish release
         shell: pwsh
         run: |
-          gh release create "${{ github.ref_name }}" `
+          gh release create "${{ env.VERSION }}" `
             dist\FullScreenBrowser.exe `
-            "dist\FullScreenBrowser-${{ github.ref_name }}.zip" `
+            "dist\FullScreenBrowser-${{ env.VERSION }}.zip" `
             --repo "${{ github.repository }}" `
-            --title "FullScreen Browser ${{ github.ref_name }}" `
-            --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update nightly release (branch push)
-        if: github.ref_type == 'branch'
-        shell: pwsh
-        run: |
-          # Recreate the dated nightly release on every successful build.
-          $ver = "nightly-$(Get-Date -Format 'yyyy.MM.dd')"
-          gh release delete $ver --yes --repo "${{ github.repository }}" 2>$null
-          gh release create $ver `
-            dist\FullScreenBrowser.exe `
-            "dist\FullScreenBrowser-$ver.zip" `
-            --repo "${{ github.repository }}" `
-            --title "Nightly $ver (${{ github.sha }})" `
-            --notes "Latest automatic build from '${{ github.ref_name }}' at ${{ github.sha }}." `
-            --prerelease
+            --title "FullScreen Browser ${{ env.VERSION }}" `
+            --notes "Automatic build from '${{ github.ref_name }}' at ${{ github.sha }}."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
