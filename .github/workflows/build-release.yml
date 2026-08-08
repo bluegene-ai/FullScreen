@@ -31,7 +31,7 @@ jobs:
       - name: Package (zip)
         shell: pwsh
         run: |
-          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "ci" }
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "nightly" }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\FullScreenBrowser.exe dist\
           Compress-Archive -Path dist\FullScreenBrowser.exe -DestinationPath "dist\FullScreenBrowser-$tag.zip"
@@ -45,8 +45,8 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-      - name: Create GitHub Release (tagged only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub Release (tagged)
+        if: github.ref_type == 'tag'
         shell: pwsh
         run: |
           gh release create "${{ github.ref_name }}" `
@@ -55,5 +55,20 @@ jobs:
             --repo "${{ github.repository }}" `
             --title "FullScreen Browser ${{ github.ref_name }}" `
             --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update nightly release (branch push)
+        if: github.ref_type == 'branch'
+        shell: pwsh
+        run: |
+          gh release create nightly `
+            dist\FullScreenBrowser.exe `
+            dist\FullScreenBrowser-nightly.zip `
+            --repo "${{ github.repository }}" `
+            --title "Nightly build ${{ github.sha }}" `
+            --notes "Latest automatic build from \`${{ github.ref_name }}\` at \`${{ github.sha }}\`." `
+            --prerelease `
+            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

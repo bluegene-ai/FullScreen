@@ -130,8 +130,8 @@ build.bat
 
 仓库已配置 `.github/workflows/build-release.yml`：
 
-- **push 到 `main` / `master`**：自动编译并上传构建产物（Actions Artifact）。
-- **打标签 `v*`（如 `v1.0.0`）**：编译后自动创建 GitHub Release，附带 `FullScreenBrowser.exe` 与 zip 包。
+- **push 到 `main` / `master`**：自动编译，上传构建产物（Actions Artifact），并自动发布到 **Nightly Release**（`nightly`，每次成功构建自动覆盖更新）。
+- **打标签 `v*`（如 `v1.0.0`）**：编译后自动创建对应版本的正式 GitHub Release，附带 `FullScreenBrowser.exe` 与 zip 包。
 
 > 部署提示：目标机器需安装 **WebView2 Evergreen Runtime**（客户端不内置运行时）；release 产物为单文件 exe，可直接拷贝运行。
 
