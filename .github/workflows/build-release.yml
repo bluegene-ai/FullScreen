@@ -40,9 +40,13 @@ jobs:
             $idx = 0
             foreach ($t in $tags) {
               if ($t -eq $base) { $idx = [Math]::Max($idx, 1) }
-              elseif ($t -like "$base?") {
+              elseif ($t -like "${base}?") {
+                # ${base}? - the braces stop PowerShell reading "$base?" as the
+                # variable named "base?" (which would be empty). An existing
+                # suffix (a=1, b=2, ...) means the NEXT slot after it is free;
+                # +1 so V2026.08.10a present -> next is ...b.
                 $n = [int][char]($t[$base.Length]) - 96
-                $idx = [Math]::Max($idx, $n)
+                $idx = [Math]::Max($idx, $n + 1)
               }
             }
             $ver = if ($idx -eq 0) { $base } else { $base + [char](96 + $idx) }
