@@ -12,6 +12,7 @@ final class ConfigValidator
         'refreshMode',
         'refreshIntervalSec',
         'refreshDailyMin',
+        'refreshTimes',
         'burnInPrevention',
         'unreachableMsg',
         'allowRemotePasswordUpdate',
@@ -82,6 +83,14 @@ final class ConfigValidator
                 $errors[] = 'refreshDailyMin must be in [0,1439]';
             }
             $normalized['refreshDailyMin'] = $min;
+        }
+
+        if (isset($normalized['refreshTimes'])) {
+            $times = trim((string)$normalized['refreshTimes']);
+            if ($times !== '' && mb_strlen($times) > 255) {
+                $errors[] = 'refreshTimes too long (>255)';
+            }
+            $normalized['refreshTimes'] = $times;
         }
 
         if (isset($normalized['burnInPrevention'])) {

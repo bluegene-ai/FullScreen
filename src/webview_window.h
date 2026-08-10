@@ -48,8 +48,10 @@ void ResizeWebView();
 
 // Auto-refresh.
 // mode: REFRESH_MODE_OFF (disabled) / REFRESH_MODE_INTERVAL (every intervalSec
-// seconds) / REFRESH_MODE_DAILY (at dailyMin minutes since midnight each day).
-void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec, int dailyMin);
+// seconds) / REFRESH_MODE_DAILY (at dailyMin, or at the comma-separated
+// refreshTimes list such as "08:00,16:00,24:00", whichever is set).
+void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec,
+                      int dailyMin, const std::wstring& refreshTimes);
 
 // Pixel shift for burn-in prevention
 void StartPixelShift();

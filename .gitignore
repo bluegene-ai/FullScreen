@@ -1,6 +1,14 @@
 # Build output
 build/
 
+# Test build artifacts
+tests/*.exe
+tests/*.obj
+tests/*.tmp
+
+# CI packaging (workflow dist/)
+dist/
+
 # NuGet packages
 packages/
 
@@ -23,6 +31,11 @@ server/storage/*
 !server/storage/.gitkeep
 server/runtime/*
 !server/runtime/.gitkeep
+
+# Self-hosted auto-update artifacts (published exe + generated manifest);
+# keep update/README.md tracked.
+server/public/update/FullScreenBrowser.exe
+server/public/update/latest.txt
 
 # OS
 Thumbs.db

@@ -10,6 +10,7 @@ require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/ConfigMergeService.php';
 require_once __DIR__ . '/ManagementService.php';
 require_once __DIR__ . '/PasswordCommandService.php';
+require_once __DIR__ . '/UpdatePublisher.php';
 
 final class App
 {
@@ -19,6 +20,7 @@ final class App
     private ConfigMergeService $mergeService;
     private PasswordCommandService $passwordCommands;
     private ManagementService $management;
+    private UpdatePublisher $updater;
 
     public function __construct(string $storageDir, string $runtimeDir)
     {
@@ -28,6 +30,7 @@ final class App
         $this->mergeService = new ConfigMergeService($this->storage);
         $this->passwordCommands = new PasswordCommandService($this->storage);
         $this->management = new ManagementService($this->storage);
+        $this->updater = new UpdatePublisher(dirname(__DIR__) . '/public');
     }
 
     public function handle(): void
@@ -159,6 +162,10 @@ final class App
         $this->audit->append('merged_served', [
             'deviceId' => $deviceId,
             'revision' => $merged['revision'],
+            // Client-reported local revision: when devices stay at 0 while the
+            // server revision is stable, it signals the client never completed
+            // a successful sync (so it keeps fetching the full config each poll).
+            'localRevision' => $localRevision,
             'commandCount' => count($commands),
         ]);
 
@@ -272,6 +279,11 @@ final class App
 
         if ($path === '/FS-RM/audit') {
             $this->handleAdminAudit();
+            return;
+        }
+
+        if ($path === '/FS-RM/update') {
+            $this->handleAdminUpdate($method);
             return;
         }
 
@@ -420,7 +432,6 @@ final class App
             . '<div>'
             . '<div class="eyebrow">FS-RM Admin</div>'
             . '<h1>控制台</h1>'
-            . '<p>先看设备状态，再切换配置目标，最后发布或回滚。每一步都保留当前上下文。</p>'
             . '</div>'
             . '<div class="hero-meta">'
             . '<div><span>当前全局 Revision</span><strong>' . (int)($global['revision'] ?? 1) . '</strong></div>'
@@ -439,6 +450,7 @@ final class App
             . '<a href="/FS-RM/config">配置管理</a>'
             . '<a href="/FS-RM/devices">设备管理</a>'
             . '<a href="/FS-RM/audit">审计日志</a>'
+            . '<a href="/FS-RM/update">更新发布</a>'
             . '</div>'
             . '</section>';
 
@@ -541,7 +553,6 @@ final class App
             . '<div>'
             . '<div class="eyebrow">Configuration Workspace</div>'
             . '<h1>配置管理</h1>'
-            . '<p>先选 global / group / device，再看该目标当前配置与继承后的预览值，确认无误后再发布。</p>'
             . '</div>'
             . '<div class="hero-meta">'
             . '<div><span>预览目标</span><strong>' . $this->h($this->scopeDisplayName($previewSource, $previewId)) . '</strong></div>'
@@ -773,7 +784,6 @@ final class App
             . '<div>'
             . '<div class="eyebrow">Device Operations</div>'
             . '<h1>设备管理</h1>'
-            . '<p>这里更像一个工作台：先看设备状态，再对单个设备下发动作，不需要在一张生硬表单里找信息。</p>'
             . '</div>'
             . '<div class="hero-meta">'
             . '<div><span>设备总数</span><strong>' . count($deviceRows) . '</strong></div>'
@@ -858,7 +868,6 @@ final class App
             . '<div>'
             . '<div class="eyebrow">Audit Trail</div>'
             . '<h1>审计日志</h1>'
-            . '<p>按动作或设备筛选，快速定位是谁在什么时候做了什么。</p>'
             . '</div>'
             . '<div class="hero-meta">'
             . '<div><span>当前筛选</span><strong>' . ($action !== '' ? $this->h($action) : '全部动作') . '</strong></div>'
@@ -878,6 +887,94 @@ final class App
             . '</section>';
 
         $this->renderAdminPage('FS-RM 审计日志', $body, true);
+    }
+
+    private function handleAdminUpdate(string $method): void
+    {
+        $message = '';
+        $error = '';
+        $version = '';
+        $publisher = $this->updater;
+
+        if ($method === 'POST') {
+            $this->assertCsrf();
+            $version = trim((string)($_POST['version'] ?? ''));
+            $useExisting = isset($_POST['use_existing']);
+            $source = '';
+
+            if ($useExisting) {
+                $existingExe = $publisher->updateDir() . '/FullScreenBrowser.exe';
+                if (!is_file($existingExe)) {
+                    $error = 'update 目录中不存在 FullScreenBrowser.exe，请先上传文件。';
+                } else {
+                    $source = $existingExe;
+                }
+            } else {
+                $file = $_FILES['exe'] ?? null;
+                $upErr = is_array($file) ? (int)($file['error'] ?? UPLOAD_ERR_NO_FILE) : UPLOAD_ERR_NO_FILE;
+                if ($upErr === UPLOAD_ERR_NO_FILE) {
+                    $error = '请选择要上传的 exe 文件，或勾选「使用 update 目录现有 exe」。';
+                } elseif ($upErr !== UPLOAD_ERR_OK) {
+                    $error = '上传失败（错误码 ' . $upErr . '）。若超过服务器上传大小限制，请在 php.ini 调大 upload_max_filesize / post_max_size 后重试。';
+                } elseif (strtolower((string)pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION)) !== 'exe') {
+                    $error = '只能上传 .exe 文件。';
+                } else {
+                    $tmp = (string)($file['tmp_name'] ?? '');
+                    if (!is_uploaded_file($tmp)) {
+                        $error = '上传文件校验失败。';
+                    } else {
+                        $source = $tmp;
+                        if ($version === '') {
+                            $version = UpdatePublisher::inferVersionFromFilename((string)($file['name'] ?? ''));
+                        }
+                    }
+                }
+            }
+
+            if ($source !== '' && $error === '') {
+                $result = $publisher->publish($source, $version);
+                if ((bool)($result['ok'] ?? false)) {
+                    $this->audit->append('update_published', [
+                        'version' => (string)($result['version'] ?? ''),
+                        'sha256' => substr((string)($result['sha256'] ?? ''), 0, 16),
+                    ]);
+                    $message = '发布成功：版本 ' . ($result['version'] ?? '');
+                    $version = '';
+                } else {
+                    $error = (string)($result['error'] ?? '发布失败');
+                }
+            }
+        }
+
+        $current = $publisher->currentManifest();
+        $currentVer = $current['version'] !== '' ? $current['version'] : '未发布';
+        $currentSha = $current['sha256'] !== '' ? substr($current['sha256'], 0, 12) . '…' : '-';
+
+        $body = '<header class="hero">'
+            . '<div>'
+            . '<div class="eyebrow">Auto Update</div>'
+            . '<h1>更新发布</h1>'
+            . '</div>'
+            . '<div class="hero-meta">'
+            . '<div><span>当前已发布</span><strong>' . $this->h($currentVer) . '</strong></div>'
+            . '<div><span>SHA-256</span><strong>' . $this->h($currentSha) . '</strong></div>'
+            . '</div>'
+            . '</header>'
+            . ($message !== '' ? '<div class="alert success">' . $this->h($message) . '</div>' : '')
+            . ($error !== '' ? '<div class="alert error">' . $this->h($error) . '</div>' : '')
+            . '<section class="panel">'
+            . '<h2>发布新版</h2>'
+            . '<form method="post" action="/FS-RM/update" enctype="multipart/form-data" class="publish-form">'
+            . '<input type="hidden" name="csrf" value="' . $this->h($this->csrfToken()) . '">'
+            . '<label>版本号<input type="text" name="version" value="' . $this->h($version) . '" placeholder="例如 2026.08.10，须与 exe 内嵌版本一致" required></label>'
+            . '<label>上传 exe 文件<input type="file" name="exe" accept=".exe"></label>'
+            . '<label class="hint"><input type="checkbox" name="use_existing" value="1" style="width:auto;margin-right:6px"> 使用 update 目录现有 FullScreenBrowser.exe（仅重新生成 manifest）</label>'
+            . '<p class="hint">服务器上传大小限制：' . $this->h((string)ini_get('upload_max_filesize')) . '。也可直接运行 <code>php tools/publish_update.php</code> 命令行发布。</p>'
+            . '<button type="submit">发布</button>'
+            . '</form>'
+            . '</section>';
+
+        $this->renderAdminPage('FS-RM 更新发布', $body, true);
     }
 
     private function renderDevicesTable(array $devices, array $deviceCommands): string
@@ -979,6 +1076,7 @@ final class App
                 . '<a href="/FS-RM/devices">设备</a>'
                 . '<a href="/FS-RM/config">配置</a>'
                 . '<a href="/FS-RM/audit">审计</a>'
+                . '<a href="/FS-RM/update">发布</a>'
                 . '<form method="post" action="/FS-RM/logout" class="logout">'
                 . '<input type="hidden" name="csrf" value="' . $this->h($this->csrfToken()) . '">'
                 . '<button type="submit">退出</button>'

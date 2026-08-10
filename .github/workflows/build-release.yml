@@ -16,17 +16,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history + tags so the release notes can diff against the
+          # previous release tag.
+          fetch-depth: 0
 
       - name: Restore WebView2 SDK (NuGet)
         shell: pwsh
         run: nuget install Microsoft.Web.WebView2 -Version $env:WEBVIEW2_VERSION -OutputDirectory packages
-
-      - name: Build (MSVC x64)
-        shell: cmd
-        run: |
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
-          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
-          build.bat
 
       - name: Compute version
         shell: pwsh
@@ -55,6 +52,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build (MSVC x64)
+        shell: cmd
+        run: |
+          rem Inject the computed version into src/version.h (used by resource.rc).
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$v='${{ env.VERSION }}' -replace '^[Vv]',''; $nums=@([regex]::Matches($v,'\d+')|ForEach-Object{[int]$_.Value}); $am=[regex]::Match($v,'([a-z])$'); $bld=0; if($am.Success){$bld=[int][char]$am.Groups[1].Value-96}; $maj=if($nums.Count-ge 1){$nums[0]}else{0}; $min=if($nums.Count-ge 2){$nums[1]}else{0}; $pat=if($nums.Count-ge 3){$nums[2]}else{0}; if($nums.Count-ge 4){$bld=$nums[3]}; $str=if($bld-gt 0){'{0}.{1}.{2}.{3}' -f $maj,$min,$pat,$bld}else{'{0}.{1}.{2}' -f $maj,$min,$pat}; @('#pragma once','#define APP_VERSION_MAJOR '+$maj,'#define APP_VERSION_MINOR '+$min,'#define APP_VERSION_PATCH '+$pat,'#define APP_VERSION_BUILD '+$bld,'#define APP_VERSION_STR "'+$str+'"','#define APP_VERSION APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_PATCH, APP_VERSION_BUILD')|Set-Content -Path src\version.h -Encoding ascii"
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
+          build.bat
+
       - name: Package (zip)
         shell: pwsh
         run: |
@@ -71,6 +77,53 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+      - name: Generate release notes (中文更新要点)
+        shell: pwsh
+        run: |
+          # Locate the previous release tag for a scoped changelog.
+          $prev = $null
+          try {
+            $tags = @(gh release list --repo "${{ github.repository }}" --limit 50 --json tagName 2>$null | ConvertFrom-Json | ForEach-Object { $_.tagName })
+          } catch { $tags = @() }
+          $prev = $tags | Where-Object { $_ -ne "$env:VERSION" } | Select-Object -First 1
+
+          if ($prev) {
+            $subjects = git log "$prev..HEAD" --pretty=format:%s 2>$null
+          } else {
+            $subjects = git log -20 --pretty=format:%s 2>$null
+          }
+
+          # Group by conventional-commit type; drop housekeeping commits.
+          $groups = @{ feat = @(); fix = @(); docs = @(); other = @() }
+          foreach ($line in @($subjects)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $clean = $line.Trim()
+            $type = 'other'; $body = $clean
+            if ($clean -match '^feat(?:\([^)]*\))?[:：]\s*(.+)$')    { $type='feat';  $body=$Matches[1] }
+            elseif ($clean -match '^fix(?:\([^)]*\))?[:：]\s*(.+)$')  { $type='fix';   $body=$Matches[1] }
+            elseif ($clean -match '^docs(?:\([^)]*\))?[:：]\s*(.+)$') { $type='docs';  $body=$Matches[1] }
+            elseif ($clean -match '^(?:chore|build|ci|test|style|refactor|perf)(?:\([^)]*\))?[:：]') { continue }
+            if ($groups[$type] -notcontains $body) { $groups[$type] += $body }
+          }
+
+          $labels = @{ feat = '✨ 新增功能'; fix = '🐛 修复'; docs = '📝 文档'; other = '📌 其他' }
+          $lines = @('## 主要更新', '')
+          foreach ($t in @('feat','fix','docs','other')) {
+            if ($groups[$t].Count -gt 0) {
+              $lines += '### ' + $labels[$t]
+              foreach ($b in $groups[$t]) { $lines += '- ' + $b }
+              $lines += ''
+            }
+          }
+          $lines += '> 自动构建：' + "${{ github.ref_name }}" + ' @ ' + "${{ github.sha }}"
+
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $lines | Set-Content -Path dist\release-notes.md -Encoding utf8
+          Write-Output 'Release notes:'
+          Get-Content dist\release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish release
         shell: pwsh
         run: |
@@ -79,6 +132,6 @@ jobs:
             "dist\FullScreenBrowser-${{ env.VERSION }}.zip" `
             --repo "${{ github.repository }}" `
             --title "FullScreen Browser ${{ env.VERSION }}" `
-            --notes "Automatic build from '${{ github.ref_name }}' at ${{ github.sha }}."
+            --notes-file dist\release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,6 +4,8 @@
 // FullScreen Browser - Resource IDs
 // ============================================================
 
+#include "version.h"
+
 #ifndef IDC_STATIC
 #define IDC_STATIC              (-1)
 #endif
@@ -31,6 +33,13 @@
 #define IDC_REFRESH_DAILY           2014
 #define IDC_REMOTE_ENABLE           2015
 #define IDC_REMOTE_BASE_URL         2016
+#define IDC_AUTOSTART_CHECK         2017
+#define IDC_AUTO_UPDATE_CHECK       2018
+#define IDC_RADIO_UPDATE_GITHUB     2019
+#define IDC_RADIO_UPDATE_SELF       2020
+#define IDC_UPDATE_REPO             2021
+#define IDC_UPDATE_BASE_URL         2022
+#define IDC_UPDATE_WINDOW           2023
 
 // Control IDs - Password Dialog
 #define IDC_PWD_INPUT           3001
@@ -44,7 +53,6 @@
 #define IDC_REGISTER_CODE       4501
 
 // Timer IDs
-#define TIMER_URL_CHECK         5001
 #define TIMER_CURSOR_HIDE       5002
 #define TIMER_PIXEL_SHIFT       5003
 #define TIMER_AUTO_REFRESH      5004
@@ -52,6 +60,4 @@
 // Icon ID
 #define IDI_MAIN_ICON           6001
 
-// Version
-#define APP_VERSION             1,0,0,0
-#define APP_VERSION_STR         "1.0.0"
+// Version (defined in version.h, injected by the build pipeline)

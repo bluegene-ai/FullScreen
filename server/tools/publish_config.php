@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
-$options = getopt('', ['file:', 'force']);
+$options = getopt('', ['file:']);
 $file = (string)($options['file'] ?? '');
 
 if ($file === '') {
-    fwrite(STDERR, "Usage: php tools/publish_config.php --file <publish.json> [--force]\n");
+    fwrite(STDERR, "Usage: php tools/publish_config.php --file <publish.json>\n");
     exit(2);
 }
 

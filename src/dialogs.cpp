@@ -6,6 +6,8 @@
 #include "config_manager.h"
 #include "crypto.h"
 #include "remote_config_client.h"
+#include "auto_start.h"
+#include "refresh_schedule.h"
 #include <Windows.h>
 #include <CommCtrl.h>
 #include <winhttp.h>
@@ -75,22 +77,18 @@ static void UpdateRefreshControls(HWND hDlg)
                  mode == AppConstants::REFRESH_MODE_DAILY);
 }
 
-// Parse "HH:MM" (24-hour) into minutes since midnight
-static bool ParseHhMm(const std::wstring& s, int& outMinute)
+// Enable/disable the auto-update source radios and inputs per the checkbox
+// and selected source radio (GitHub repo vs self-hosted URL).
+static void UpdateUpdateControls(HWND hDlg)
 {
-    size_t colon = s.find(L':');
-    if (colon == std::wstring::npos || colon == 0 || colon == s.size() - 1) {
-        return false;
-    }
-    const std::wstring hh = s.substr(0, colon);
-    const std::wstring mm = s.substr(colon + 1);
-    for (wchar_t c : hh) if (c < L'0' || c > L'9') return false;
-    for (wchar_t c : mm) if (c < L'0' || c > L'9') return false;
-    int h = _wtoi(hh.c_str());
-    int m = _wtoi(mm.c_str());
-    if (h < 0 || h > 23 || m < 0 || m > 59) return false;
-    outMinute = h * 60 + m;
-    return true;
+    bool enabled = IsDlgButtonChecked(hDlg, IDC_AUTO_UPDATE_CHECK) == BST_CHECKED;
+    bool github = IsDlgButtonChecked(hDlg, IDC_RADIO_UPDATE_GITHUB) == BST_CHECKED;
+
+    EnableWindow(GetDlgItem(hDlg, IDC_RADIO_UPDATE_GITHUB), enabled);
+    EnableWindow(GetDlgItem(hDlg, IDC_RADIO_UPDATE_SELF), enabled);
+    EnableWindow(GetDlgItem(hDlg, IDC_UPDATE_REPO), enabled && github);
+    EnableWindow(GetDlgItem(hDlg, IDC_UPDATE_BASE_URL), enabled && !github);
+    EnableWindow(GetDlgItem(hDlg, IDC_UPDATE_WINDOW), enabled);
 }
 
 static std::wstring FormatHhMm(int minute)
@@ -133,7 +131,7 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
             SendMessageW(GetDlgItem(hDlg, IDC_CONFIRM_PASSWORD), EM_SETLIMITTEXT, 255, 0);
             SendMessageW(GetDlgItem(hDlg, IDC_UNREACHABLE_MSG), EM_SETLIMITTEXT, 1023, 0);
             SendMessageW(GetDlgItem(hDlg, IDC_REFRESH_INTERVAL), EM_SETLIMITTEXT, 6, 0);
-            SendMessageW(GetDlgItem(hDlg, IDC_REFRESH_DAILY), EM_SETLIMITTEXT, 5, 0);
+            SendMessageW(GetDlgItem(hDlg, IDC_REFRESH_DAILY), EM_SETLIMITTEXT, 250, 0);
             SendMessageW(GetDlgItem(hDlg, IDC_REMOTE_BASE_URL), EM_SETLIMITTEXT, 1023, 0);
 
             // Set refresh mode radios and values
@@ -150,16 +148,43 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
             }
             CheckRadioButton(hDlg, IDC_RADIO_REFRESH_OFF, IDC_RADIO_REFRESH_DAILY, checkId);
             SetDlgItemInt(hDlg, IDC_REFRESH_INTERVAL, dlgData->config->refreshIntervalSec, FALSE);
-            SetDlgItemTextW(hDlg, IDC_REFRESH_DAILY, FormatHhMm(dlgData->config->refreshDailyMin).c_str());
+            std::wstring dailyText = dlgData->config->refreshTimes[0]
+                ? dlgData->config->refreshTimes
+                : FormatHhMm(dlgData->config->refreshDailyMin);
+            SetDlgItemTextW(hDlg, IDC_REFRESH_DAILY, dailyText.c_str());
             UpdateRefreshControls(hDlg);
 
             // Set burn-in prevention checkbox
             CheckDlgButton(hDlg, IDC_BURNIN_CHECK,
                            dlgData->config->burnInPrevention ? BST_CHECKED : BST_UNCHECKED);
 
+            // Set auto-start checkbox
+            CheckDlgButton(hDlg, IDC_AUTOSTART_CHECK,
+                           dlgData->config->autoStart ? BST_CHECKED : BST_UNCHECKED);
+
             CheckDlgButton(hDlg, IDC_REMOTE_ENABLE,
                            dlgData->config->remoteEnabled ? BST_CHECKED : BST_UNCHECKED);
             SetDlgItemTextW(hDlg, IDC_REMOTE_BASE_URL, dlgData->config->remoteBaseUrl);
+
+            // Auto update settings
+            CheckDlgButton(hDlg, IDC_AUTO_UPDATE_CHECK,
+                           dlgData->config->autoUpdate ? BST_CHECKED : BST_UNCHECKED);
+            CheckRadioButton(hDlg, IDC_RADIO_UPDATE_GITHUB, IDC_RADIO_UPDATE_SELF,
+                             dlgData->config->updateSource == AppConstants::UPDATE_SOURCE_GITHUB
+                                 ? IDC_RADIO_UPDATE_GITHUB : IDC_RADIO_UPDATE_SELF);
+            SetDlgItemTextW(hDlg, IDC_UPDATE_REPO, dlgData->config->updateRepo);
+            // GitHub repo: prefill this project's release page when empty.
+            if (dlgData->config->updateRepo[0] == L'\0' &&
+                dlgData->config->autoUpdate &&
+                dlgData->config->updateSource == AppConstants::UPDATE_SOURCE_GITHUB) {
+                SetDlgItemTextW(hDlg, IDC_UPDATE_REPO, AppConstants::UPDATE_GITHUB_REPO_DEFAULT);
+            }
+            SetDlgItemTextW(hDlg, IDC_UPDATE_BASE_URL, dlgData->config->updateBaseUrl);
+            SetDlgItemTextW(hDlg, IDC_UPDATE_WINDOW, dlgData->config->updateWindow);
+            SendMessageW(GetDlgItem(hDlg, IDC_UPDATE_REPO), EM_SETLIMITTEXT, 127, 0);
+            SendMessageW(GetDlgItem(hDlg, IDC_UPDATE_BASE_URL), EM_SETLIMITTEXT, 1023, 0);
+            SendMessageW(GetDlgItem(hDlg, IDC_UPDATE_WINDOW), EM_SETLIMITTEXT, 63, 0);
+            UpdateUpdateControls(hDlg);
 
             CenterDialog(hDlg, GetParent(hDlg));
             SetWindowPos(hDlg, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
@@ -175,6 +200,25 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
         case IDC_RADIO_REFRESH_DAILY:
             if (HIWORD(wParam) == BN_CLICKED) {
                 UpdateRefreshControls(hDlg);
+            }
+            break;
+
+        case IDC_AUTO_UPDATE_CHECK:
+        case IDC_RADIO_UPDATE_GITHUB:
+        case IDC_RADIO_UPDATE_SELF:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                UpdateUpdateControls(hDlg);
+                // Default the GitHub repo to this project's release page when
+                // auto-update is on, GitHub is selected and the field is empty.
+                if (IsDlgButtonChecked(hDlg, IDC_AUTO_UPDATE_CHECK) == BST_CHECKED &&
+                    IsDlgButtonChecked(hDlg, IDC_RADIO_UPDATE_GITHUB) == BST_CHECKED) {
+                    wchar_t repoBuf[128] = {};
+                    GetDlgItemTextW(hDlg, IDC_UPDATE_REPO, repoBuf, 128);
+                    if (repoBuf[0] == L'\0') {
+                        SetDlgItemTextW(hDlg, IDC_UPDATE_REPO,
+                                        AppConstants::UPDATE_GITHUB_REPO_DEFAULT);
+                    }
+                }
             }
             break;
 
@@ -241,20 +285,26 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
                 }
 
                 int refreshDailyMin = AppConstants::REFRESH_DAILY_DEFAULT;
+                wchar_t dailyBuf[256] = {};
                 if (refreshMode == AppConstants::REFRESH_MODE_DAILY) {
-                    wchar_t dailyBuf[16] = {};
-                    GetDlgItemTextW(hDlg, IDC_REFRESH_DAILY, dailyBuf, 16);
-                    if (!ParseHhMm(std::wstring(dailyBuf), refreshDailyMin)) {
-                        MessageBoxW(hDlg, L"Please enter a valid daily refresh time in HH:MM (24-hour) format.",
+                    GetDlgItemTextW(hDlg, IDC_REFRESH_DAILY, dailyBuf, 256);
+                    std::vector<int> dailyMins;
+                    if (!RefreshSchedule::ParseTimes(dailyBuf, dailyMins)) {
+                        MessageBoxW(hDlg, L"Please enter one or more daily refresh times in HH:MM (24h) "
+                                    L"format, comma-separated, e.g. 08:00,16:00,24:00.",
                                     L"Input Error", MB_OK | MB_ICONWARNING);
                         SetFocus(GetDlgItem(hDlg, IDC_REFRESH_DAILY));
                         return TRUE;
                     }
+                    refreshDailyMin = dailyMins.front();
                 }
 
                 dlgData->config->refreshMode = refreshMode;
                 dlgData->config->refreshIntervalSec = refreshSec;
                 dlgData->config->refreshDailyMin = refreshDailyMin;
+                // Keep the raw list; when DAILY is off this clears any stale list.
+                wcsncpy_s(dlgData->config->refreshTimes, _countof(dlgData->config->refreshTimes),
+                          dailyBuf, _TRUNCATE);
 
                 // Get burn-in prevention
                 dlgData->config->burnInPrevention =
@@ -262,6 +312,9 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
 
                 dlgData->config->remoteEnabled =
                     (IsDlgButtonChecked(hDlg, IDC_REMOTE_ENABLE) == BST_CHECKED);
+
+                dlgData->config->autoStart =
+                    (IsDlgButtonChecked(hDlg, IDC_AUTOSTART_CHECK) == BST_CHECKED);
 
                 wchar_t remoteBaseUrl[1024] = {};
                 GetDlgItemTextW(hDlg, IDC_REMOTE_BASE_URL, remoteBaseUrl, 1024);
@@ -282,6 +335,52 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
                 }
                 wcsncpy_s(dlgData->config->remoteBaseUrl, remoteBaseUrl, _TRUNCATE);
 
+                // Auto update settings
+                dlgData->config->autoUpdate =
+                    (IsDlgButtonChecked(hDlg, IDC_AUTO_UPDATE_CHECK) == BST_CHECKED);
+                dlgData->config->updateSource =
+                    (IsDlgButtonChecked(hDlg, IDC_RADIO_UPDATE_GITHUB) == BST_CHECKED)
+                        ? AppConstants::UPDATE_SOURCE_GITHUB
+                        : AppConstants::UPDATE_SOURCE_SELF;
+
+                wchar_t updateRepo[128] = {};
+                wchar_t updateBaseUrl[1024] = {};
+                GetDlgItemTextW(hDlg, IDC_UPDATE_REPO, updateRepo, 128);
+                GetDlgItemTextW(hDlg, IDC_UPDATE_BASE_URL, updateBaseUrl, 1024);
+                GetDlgItemTextW(hDlg, IDC_UPDATE_WINDOW,
+                                dlgData->config->updateWindow, 64);
+
+                if (dlgData->config->autoUpdate) {
+                    if (dlgData->config->updateSource == AppConstants::UPDATE_SOURCE_GITHUB) {
+                        std::wstring repoStr(updateRepo);
+                        if (repoStr.empty() || repoStr.find(L'/') == std::wstring::npos) {
+                            MessageBoxW(hDlg, L"Enter the GitHub repo as owner/repo "
+                                        L"(e.g. owner/FullScreen).",
+                                        L"Input Error", MB_OK | MB_ICONWARNING);
+                            SetFocus(GetDlgItem(hDlg, IDC_UPDATE_REPO));
+                            return TRUE;
+                        }
+                    } else {
+                        std::wstring updateUrlStr(updateBaseUrl);
+                        if (updateUrlStr.empty()) {
+                            MessageBoxW(hDlg, L"Enter the self-hosted update directory URL.",
+                                        L"Input Error", MB_OK | MB_ICONWARNING);
+                            SetFocus(GetDlgItem(hDlg, IDC_UPDATE_BASE_URL));
+                            return TRUE;
+                        }
+                        if (updateUrlStr.find(L"http://") != 0 && updateUrlStr.find(L"https://") != 0) {
+                            MessageBoxW(hDlg, L"Update URL must start with http:// or https://.",
+                                        L"Input Error", MB_OK | MB_ICONWARNING);
+                            SetFocus(GetDlgItem(hDlg, IDC_UPDATE_BASE_URL));
+                            return TRUE;
+                        }
+                    }
+                    // The maintenance window is not validated here; a malformed
+                    // value fails closed at runtime (updates simply don't apply).
+                }
+                wcsncpy_s(dlgData->config->updateRepo, updateRepo, _TRUNCATE);
+                wcsncpy_s(dlgData->config->updateBaseUrl, updateBaseUrl, _TRUNCATE);
+
                 // Get unreachable message
                 GetDlgItemTextW(hDlg, IDC_UNREACHABLE_MSG,
                                 dlgData->config->unreachableMsg, 1024);
@@ -292,6 +391,13 @@ static INT_PTR CALLBACK ConfigDialogProcImpl(HWND hDlg, UINT msg,
 
                 // Save to file
                 if (ConfigManager::SaveConfig(*dlgData->config, *dlgData->plainPassword)) {
+                    // Apply the HKCU Run entry: register when checked, remove when unchecked.
+                    // Failing here is non-fatal (config is already saved); just warn.
+                    if (!AutoStart::SetAutoStart(dlgData->config->autoStart)) {
+                        MessageBoxW(hDlg, L"Failed to update the auto-start registry entry.",
+                                    AppConstants::APP_NAME, MB_OK | MB_ICONWARNING);
+                    }
+
                     // Non-blocking preflight: warn if the remote server is
                     // unreachable, but still allow the save (offline deploy).
                     // Remote eligibility is re-evaluated at runtime.

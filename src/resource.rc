@@ -38,7 +38,7 @@ END
 // ============================================================
 // Config Dialog (IDD_CONFIG_DIALOG)
 // ============================================================
-IDD_CONFIG_DIALOG DIALOGEX 0, 0, 390, 380
+IDD_CONFIG_DIALOG DIALOGEX 0, 0, 390, 518
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "FullScreen Browser - Settings"
 FONT 9, "Segoe UI", 400, 0, 0x1
@@ -64,25 +64,41 @@ BEGIN
     GROUPBOX        "Auto refresh", IDC_STATIC, 12, 196, 366, 60
     AUTORADIOBUTTON "Off", IDC_RADIO_REFRESH_OFF, 24, 210, 60, 12, WS_GROUP | WS_TABSTOP
     AUTORADIOBUTTON "Every", IDC_RADIO_REFRESH_INTERVAL, 24, 228, 60, 12
+    AUTORADIOBUTTON "Daily at", IDC_RADIO_REFRESH_DAILY, 24, 246, 60, 12
     EDITTEXT        IDC_REFRESH_INTERVAL, 92, 226, 60, 14, ES_NUMBER
     LTEXT           "seconds", IDC_STATIC, 158, 230, 50, 12
-    AUTORADIOBUTTON "Daily at", IDC_RADIO_REFRESH_DAILY, 24, 246, 60, 12
-    EDITTEXT        IDC_REFRESH_DAILY, 92, 244, 60, 14, ES_AUTOHSCROLL
-    LTEXT           "HH:MM (24h)", IDC_STATIC, 158, 248, 90, 12
+    EDITTEXT        IDC_REFRESH_DAILY, 92, 244, 150, 14, ES_AUTOHSCROLL
+    LTEXT           "HH:MM,HH:MM (24h)", IDC_STATIC, 246, 248, 130, 12
 
     CONTROL         "Enable burn-in prevention (pixel shift)", IDC_BURNIN_CHECK,
                     "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 266, 230, 14
 
+    CONTROL         "Start automatically at Windows login", IDC_AUTOSTART_CHECK,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 286, 260, 14
+
     CONTROL         "Enable remote configuration", IDC_REMOTE_ENABLE,
-                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 286, 150, 14
-    LTEXT           "Remote server URL:", IDC_STATIC, 12, 306, 110, 12
-    EDITTEXT        IDC_REMOTE_BASE_URL, 12, 320, 366, 14, ES_AUTOHSCROLL
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 306, 150, 14
+    LTEXT           "Remote server URL:", IDC_STATIC, 12, 326, 110, 12
+    EDITTEXT        IDC_REMOTE_BASE_URL, 12, 340, 366, 14, ES_AUTOHSCROLL
 
-    LTEXT           "", IDC_URL_STATUS, 12, 342, 366, 12
+    GROUPBOX        "Auto update", IDC_STATIC, 12, 358, 366, 118
+    CONTROL         "Enable automatic updates", IDC_AUTO_UPDATE_CHECK,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 24, 372, 180, 14
+    AUTORADIOBUTTON "GitHub releases", IDC_RADIO_UPDATE_GITHUB, 24, 392, 120, 12,
+                    WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "Self-hosted server", IDC_RADIO_UPDATE_SELF, 150, 392, 130, 12
+    LTEXT           "GitHub repo (owner/repo):", IDC_STATIC, 24, 410, 150, 12
+    EDITTEXT        IDC_UPDATE_REPO, 24, 424, 166, 14, ES_AUTOHSCROLL
+    LTEXT           "Update dir URL:", IDC_STATIC, 204, 410, 90, 12
+    EDITTEXT        IDC_UPDATE_BASE_URL, 204, 424, 160, 14, ES_AUTOHSCROLL
+    LTEXT           "Maintenance window HH:MM-HH:MM (optional):", IDC_STATIC, 24, 444, 250, 12
+    EDITTEXT        IDC_UPDATE_WINDOW, 24, 458, 166, 14, ES_AUTOHSCROLL
 
-    DEFPUSHBUTTON   "OK", IDOK, 210, 356, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 270, 356, 50, 14
-    PUSHBUTTON      "Test URL", IDC_BTN_TEST_URL, 330, 356, 50, 14
+    LTEXT           "", IDC_URL_STATUS, 12, 486, 366, 12
+
+    DEFPUSHBUTTON   "OK", IDOK, 210, 500, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 270, 500, 50, 14
+    PUSHBUTTON      "Test URL", IDC_BTN_TEST_URL, 330, 500, 50, 14
 END
 
 // ============================================================

@@ -3,9 +3,12 @@
 // ============================================================
 #include "crypto.h"
 #include <Windows.h>
+#include <bcrypt.h>
 #include <string>
 #include <vector>
 #include <algorithm>
+
+#pragma comment(lib, "Bcrypt.lib")
 
 namespace Crypto {
 
@@ -19,7 +22,7 @@ static const unsigned char XOR_KEY[] = {
 static const wchar_t B64_TABLE[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // ============================================================
-// Base64 encode bytes 鈫?wide string
+// Base64 encode bytes -> wide string
 // ============================================================
 static std::wstring Base64Encode(const std::vector<unsigned char>& data)
 {
@@ -48,7 +51,7 @@ static std::wstring Base64Encode(const std::vector<unsigned char>& data)
 }
 
 // ============================================================
-// Base64 decode wide string 鈫?bytes
+// Base64 decode wide string -> bytes
 // ============================================================
 static std::vector<unsigned char> Base64Decode(const std::wstring& input)
 {
@@ -99,7 +102,7 @@ std::wstring Encrypt(std::wstring_view plain)
 {
     if (plain.empty()) return L"";
 
-    // Convert wstring 鈫?UTF-8 bytes
+    // Convert wstring -> UTF-8 bytes
     int len = WideCharToMultiByte(CP_UTF8, 0, plain.data(), (int)plain.size(),
                                    nullptr, 0, nullptr, nullptr);
     if (len <= 0) return L"";
@@ -127,7 +130,7 @@ std::wstring Decrypt(std::wstring_view encrypted)
     // XOR
     bytes = XorData(bytes);
 
-    // Convert UTF-8 bytes 鈫?wstring
+    // Convert UTF-8 bytes -> wstring
     int len = MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)bytes.data(), (int)bytes.size(),
                                    nullptr, 0);
     if (len <= 0) return L"";
@@ -136,6 +139,81 @@ std::wstring Decrypt(std::wstring_view encrypted)
     MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)bytes.data(), (int)bytes.size(),
                         result.data(), len);
     return result;
+}
+
+// ============================================================
+// SHA-256 (BCrypt) - lowercase hex digest
+// ============================================================
+std::string Sha256Hex(const void* data, size_t len)
+{
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) {
+        return out;
+    }
+    if (BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) != 0) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return out;
+    }
+
+    if (BCryptHashData(hHash, reinterpret_cast<PUCHAR>(const_cast<void*>(data)),
+                       static_cast<ULONG>(len), 0) == 0) {
+        BYTE hash[32] = {};
+        if (BCryptFinishHash(hHash, hash, sizeof(hash), 0) == 0) {
+            out.reserve(64);
+            for (BYTE b : hash) {
+                out.push_back(hex[(b >> 4) & 0xF]);
+                out.push_back(hex[b & 0xF]);
+            }
+        }
+    }
+
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    return out;
+}
+
+bool Sha256FileHex(const std::wstring& path, std::string& hexOut)
+{
+    hexOut.clear();
+
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    bool ok = false;
+
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0 &&
+        BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) == 0) {
+        BYTE buf[64 * 1024] = {};
+        DWORD read = 0;
+        ok = true;
+        while (ReadFile(hFile, buf, sizeof(buf), &read, nullptr) && read > 0) {
+            if (BCryptHashData(hHash, buf, read, 0) != 0) { ok = false; break; }
+        }
+        if (ok) {
+            BYTE hash[32] = {};
+            if (BCryptFinishHash(hHash, hash, sizeof(hash), 0) == 0) {
+                static const char hex[] = "0123456789abcdef";
+                hexOut.reserve(64);
+                for (BYTE b : hash) {
+                    hexOut.push_back(hex[(b >> 4) & 0xF]);
+                    hexOut.push_back(hex[b & 0xF]);
+                }
+            } else {
+                ok = false;
+            }
+        }
+        BCryptDestroyHash(hHash);
+    }
+    if (hAlg) BCryptCloseAlgorithmProvider(hAlg, 0);
+    CloseHandle(hFile);
+    return ok;
 }
 
 } // namespace Crypto

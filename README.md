@@ -9,7 +9,7 @@
 
 - **内容必须全屏、不能被随意切走或关闭**：键盘/鼠标全局拦截实现 kiosk 锁定，仅放行密码保护的退出/改设置，防止现场误操作或破坏。
 - **多台设备的配置无法统一管理**：后台改一处、全网设备自动生效——三级配置（全局→分组→设备）下发并热应用，无需逐台操作。
-- **无人值守时的稳定性**：断网自动显示自定义提示并持续监测、恢复自动回页；支持自动刷新与像素位移防烧屏。
+- **无人值守时的稳定性**：断网自动显示自定义提示并持续监测、恢复自动回页；支持自动刷新（固定秒数 / 每天多个固定时间点，如 `08:00,16:00,24:00`）与像素位移防烧屏。
 - **远程维护与安全闭环**：远程下发改密指令、设备注册状态与审计日志、配置回滚；配置 HMAC 签名校验防篡改，令牌仅存哈希。
 
 典型场景：商场/门店/酒店/医院的数字标牌与信息屏、展厅产品演示、会议室/教室/叫号屏、企业内部公告与数据看板，以及任何需要「锁定全屏运行一个 Web 应用」、量大分散且需远程运维的终端。
@@ -83,6 +83,9 @@ php -S 127.0.0.1:8085 -t public
 - **URL 可达性监测** — 不可达显示自定义提示，恢复后自动重新加载
 - **远程配置** — 从服务端拉取合并配置并热应用（URL/缩放/刷新/烧屏保护/提示语等）
 - **远程改密** — 接收服务端下发的改密命令，有效期内消费并回执
+- **自动刷新** — 固定秒数间隔刷新，或每天多个固定时间点刷新（`Daily at` 支持逗号分隔，如 `08:00,16:00,24:00`，`24:00` 即午夜）
+- **开机自启** — 设置中勾选后写入 `HKCU\...\CurrentVersion\Run`，登录后自动启动；取消勾选即移除（无需管理员，不产生额外文件）
+- **自动更新** — 可选：从 GitHub Releases（每天最多查一次）或自建服务器拉取新版本；SHA-256 校验（自建源）+ 崩溃自动回滚 + 维护窗口，更新失败不影响当前版本继续运行
 - **单文件部署** — 编译产物为单个 `.exe`，无需额外 DLL
 
 ### 服务端
@@ -91,6 +94,7 @@ php -S 127.0.0.1:8085 -t public
 - 命令下发（远程改密，消费幂等 + ack 闭环）
 - Web 管理后台：控制台 / 设备 / 配置 / 审计
 - 配置历史与回滚、审计日志
+- 自建更新源：`public/update/` 静态目录 + `latest.txt` manifest（版本/SHA-256/文件名）；后台「发布」页或 `tools/publish_update.php` 一键发布新版
 
 ## 快捷键
 
@@ -111,6 +115,13 @@ php -S 127.0.0.1:8085 -t public
 4. **设备 ID** — 首次注册时自动生成为 `FSB-<GUID>`；之后沿用
 5. **后续运行** — 直接全屏加载目标网页；启用远程时按服务端下发的轮询参数定时拉取配置并热应用
 
+**启用自动更新（可选）** — 在设置对话框的 *Auto update* 分组中：
+- 勾选 *Enable automatic updates*，选择更新源：
+  - **Self-hosted server**（默认）— *Update dir URL* 填自建服务器更新目录，如 `http://127.0.0.1:8085/update`；该目录需含 `latest.txt` + `FullScreenBrowser.exe`（见「服务端使用 → 自建更新源」）
+  - **GitHub releases** — *GitHub repo* 填 `owner/repo`；客户端每天最多查询一次 GitHub
+- *Maintenance window*（可选）— 填 `HH:MM-HH:MM` 限定替换重启时间窗口（如 `02:00-03:00`），避免打断公共屏；留空则检测到新版本后尽快应用
+- 更新流程：拉取 manifest/版本 → 下载 → SHA-256 校验（自建源）或版本校验（GitHub）→ 窗口内替换重启；新版本启动自检失败连续 3 次自动回滚到旧版，不会影响正常使用
+
 > 修改设置对话框中的 URL/缩放/刷新等本地项后，若远程配置生效，服务端下发值会覆盖本地对应项；远程改密命令生效后本机密码被更新。
 
 ## 客户端配置存储
@@ -122,6 +133,9 @@ php -S 127.0.0.1:8085 -t public
 | `config.dat` | 主配置（v4 格式），密码以 XOR+Base64 混淆存储 |
 | `remote_token.dat` | 设备 token（DPAPI 加密） |
 | `consumed_commands.dat` | 已消费的改密命令 ID（幂等依据） |
+| `update.pending` | 已下载待应用的新版本标记（等待维护窗口） |
+| `update.applied` / `update.attempts` | 已应用待确认标记 / 新版本启动尝试计数（连续失败自动回滚） |
+| `update_lastcheck.dat` | 更新检查节流时间戳（GitHub 源每天最多一次） |
 | `WebView2\` | WebView2 浏览器数据目录 |
 
 - 删除 `config.dat` 可恢复为首次运行状态
@@ -212,7 +226,7 @@ php -S 127.0.0.1:8085 -t server/public
 5. **远程改密**：后台下发 `password_update` 命令，客户端在有效期内消费，服务端标记已消费（幂等）
 
 ### 可下发配置字段（白名单）
-`url`、`zoomPercent`、`refreshMode`、`refreshIntervalSec`、`refreshDailyMin`、`burnInPrevention`、`unreachableMsg`、`allowRemotePasswordUpdate`
+`url`、`zoomPercent`、`refreshMode`、`refreshIntervalSec`、`refreshDailyMin`、`refreshTimes`、`burnInPrevention`、`unreachableMsg`、`allowRemotePasswordUpdate`
 
 ### 合并优先级
 `global`（所有设备）→ `group`（按设备所属分组）→ `device`（单设备覆盖）；最终合并结果再做白名单过滤。

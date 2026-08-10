@@ -5,12 +5,14 @@
 #include "resource.h"
 #include "config_manager.h"
 #include "url_monitor.h"
+#include "refresh_schedule.h"
 #include <Windows.h>
 #include <wrl.h>
 #include <string>
 #include <sstream>
 #include <mutex>
 #include <atomic>
+#include <vector>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
@@ -59,6 +61,7 @@ static std::wstring g_refreshUrl;
 static int g_refreshMode = AppConstants::REFRESH_MODE_OFF;
 static int g_refreshIntervalSec = 0;
 static int g_refreshDailyMin = AppConstants::REFRESH_DAILY_DEFAULT;
+static std::vector<int> g_refreshTimes; // sorted minutes-of-day for DAILY mode
 
 // ============================================================
 // Forward declarations
@@ -352,8 +355,6 @@ HWND CreateFullscreenWindow(HINSTANCE hInstance)
 
     g_hWnd = hWnd;
 
-    SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)nullptr);
-
     ShowWindow(hWnd, SW_SHOWMAXIMIZED);
     UpdateWindow(hWnd);
 
@@ -399,15 +400,17 @@ void ShowMessage(const std::wstring& htmlMessage)
             return; // already showing this message; keep it (no flicker)
         }
         g_messageText = htmlMessage;
+        if (!g_webView || !g_webViewReady) {
+            // WebView not ready yet: nothing was displayed. Keep the message
+            // invisible so the next monitor report (while unreachable) will
+            // actually show it once the WebView is up.
+            return;
+        }
     }
+
     g_messageVisible.store(true);
-
-    std::wstring html = BuildMessageHtml(htmlMessage);
-
-    if (g_webView && g_webViewReady) {
-        g_showingMessage = true;
-        g_webView->NavigateToString(html.c_str());
-    }
+    g_showingMessage = true;
+    g_webView->NavigateToString(BuildMessageHtml(htmlMessage).c_str());
 }
 
 // ============================================================
@@ -540,29 +543,21 @@ static void DoPixelShift()
 // ============================================================
 // Auto-refresh
 // ============================================================
-// Milliseconds until the next occurrence of dailyMin (minutes since midnight).
-static unsigned MsUntilNextDaily(int dailyMin)
-{
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    int nowMin = st.wHour * 60 + st.wMinute;
-    int delta = dailyMin - nowMin; // minutes until target (<= 0 = already passed today)
-    if (delta <= 0) delta += 24 * 60;
-
-    long long ms = (long long)delta * 60000;
-    ms -= (long long)st.wSecond * 1000 + st.wMilliseconds; // land exactly on :00
-    if (ms <= 0) ms += 24LL * 60 * 60 * 1000;
-
-    return (unsigned)ms;
-}
-
-void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec, int dailyMin)
+void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec,
+                      int dailyMin, const std::wstring& refreshTimes)
 {
     g_refreshUrl = url;
     g_refreshMode = mode;
     g_refreshIntervalSec = intervalSec;
     g_refreshDailyMin = dailyMin;
+
+    // Parse the comma-separated time list; fall back to the legacy single
+    // dailyMin if the list is absent/invalid (e.g. migrated old config).
+    g_refreshTimes.clear();
+    if (!RefreshSchedule::ParseTimes(refreshTimes, g_refreshTimes) &&
+        dailyMin >= 0 && dailyMin < 24 * 60) {
+        g_refreshTimes.push_back(dailyMin);
+    }
 
     if (g_hWnd) {
         KillTimer(g_hWnd, TIMER_AUTO_REFRESH);
@@ -572,8 +567,9 @@ void StartAutoRefresh(const std::wstring& url, int mode, int intervalSec, int da
 
     if (mode == AppConstants::REFRESH_MODE_INTERVAL && intervalSec > 0) {
         SetTimer(g_hWnd, TIMER_AUTO_REFRESH, (unsigned)(intervalSec * 1000), nullptr);
-    } else if (mode == AppConstants::REFRESH_MODE_DAILY) {
-        SetTimer(g_hWnd, TIMER_AUTO_REFRESH, MsUntilNextDaily(dailyMin), nullptr);
+    } else if (mode == AppConstants::REFRESH_MODE_DAILY && !g_refreshTimes.empty()) {
+        // One-shot timer to the next slot; re-armed after each fire.
+        SetTimer(g_hWnd, TIMER_AUTO_REFRESH, RefreshSchedule::MsUntilNext(g_refreshTimes), nullptr);
     }
 }
 
@@ -643,9 +639,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (g_pixelShiftActive) DoPixelShift();
         } else if (wParam == TIMER_AUTO_REFRESH) {
             DoAutoRefresh();
-            // Daily mode timer is one-shot: re-arm for the next day
-            if (g_refreshMode == AppConstants::REFRESH_MODE_DAILY && g_hWnd) {
-                SetTimer(g_hWnd, TIMER_AUTO_REFRESH, MsUntilNextDaily(g_refreshDailyMin), nullptr);
+            // Daily mode timer is one-shot: re-arm to the next scheduled slot
+            if (g_refreshMode == AppConstants::REFRESH_MODE_DAILY &&
+                g_hWnd && !g_refreshTimes.empty()) {
+                SetTimer(g_hWnd, TIMER_AUTO_REFRESH,
+                         RefreshSchedule::MsUntilNext(g_refreshTimes), nullptr);
             }
         }
         break;

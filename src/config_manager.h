@@ -27,17 +27,11 @@ bool LoadConfig(AppConfig& config);
 // Save config to disk. Encrypts password before writing.
 bool SaveConfig(const AppConfig& config, std::wstring_view plainPassword);
 
-// Delete config file (for testing/reset)
-bool DeleteConfig();
-
 // Persist the remote device token protected with DPAPI.
 bool SaveRemoteToken(std::wstring_view token);
 
 // Load and decrypt the persisted remote device token.
 bool LoadRemoteToken(std::wstring& token);
-
-// Delete the persisted remote device token.
-bool DeleteRemoteToken();
 
 // Load consumed remote command ids from local storage.
 bool LoadConsumedCommandIds(std::vector<std::wstring>& commandIds);

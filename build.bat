@@ -64,7 +64,7 @@ if not exist "%WEBVIEW2_INCLUDE%" (
 REM --- Compile ---
 echo [BUILD] Compiling FullScreen Browser...
 
-set CFLAGS=/nologo /W4 /EHsc /std:c++17 /MT /O2 /DNDEBUG /DUNICODE /D_UNICODE
+set CFLAGS=/nologo /W4 /EHsc /std:c++17 /MT /O2 /DNDEBUG /DUNICODE /D_UNICODE /utf-8
 set CFLAGS=%CFLAGS% /I"%SRC_DIR%" /I"%WEBVIEW2_INCLUDE%"
 
 set LFLAGS=/link /NOLOGO /SUBSYSTEM:WINDOWS /MACHINE:X64

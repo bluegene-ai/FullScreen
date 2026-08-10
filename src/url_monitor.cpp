@@ -22,7 +22,6 @@ static std::atomic<bool> g_unreachable{false};
 // Start() right after Stop() can never leave two monitor threads running (race).
 static std::atomic<int> g_generation{0};
 static std::mutex g_mutex;
-static HWND g_timerWnd = nullptr;
 
 // ============================================================
 // Check if URL is reachable via HEAD request
@@ -117,6 +116,22 @@ static bool CheckUrlReachable(const std::wstring& url)
 }
 
 // ============================================================
+// Invoke the reachability callback from a local copy taken under the mutex,
+// so a concurrent Stop() (which nulls g_callback) can never free it mid-call.
+// ============================================================
+static void InvokeCallback(bool reachable)
+{
+    ReachabilityCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        cb = g_callback;
+    }
+    if (cb) {
+        cb(reachable);
+    }
+}
+
+// ============================================================
 // Worker thread for active URL checking
 // ============================================================
 static DWORD WINAPI MonitorThreadProc(LPVOID lpParam)
@@ -131,8 +146,8 @@ static DWORD WINAPI MonitorThreadProc(LPVOID lpParam)
         // Report on transitions; additionally keep reporting while unreachable
         // so the UI re-asserts the message if it was overwritten (e.g. by an
         // auto-refresh). ShowMessage is idempotent while the message is visible.
-        if (g_callback && (reachable != !prevUnreachable || !reachable)) {
-            g_callback(reachable);
+        if (reachable != !prevUnreachable || !reachable) {
+            InvokeCallback(reachable);
         }
 
         // Wait for interval or stop signal (~10s)
@@ -153,7 +168,10 @@ void Start(const std::wstring& url, ReachabilityCallback callback)
     Stop();
 
     g_url = url;
-    g_callback = std::move(callback);
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_callback = std::move(callback);
+    }
     g_unreachable = false;
     const int myGen = g_generation.load();
     g_running = true;
@@ -167,15 +185,18 @@ void Stop()
 {
     g_running = false;
     g_generation.fetch_add(1); // invalidate any in-flight worker thread
-    Sleep(50); // Let thread exit
-    g_callback = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_callback = nullptr;
+    }
+    Sleep(50); // Let the worker observe the new generation and exit
 }
 
 void OnNavigationCompleted(bool success)
 {
     bool prev = g_unreachable.exchange(!success);
-    if (success != !prev && g_callback) {
-        g_callback(success);
+    if (success != !prev) {
+        InvokeCallback(success);
     }
 }
 

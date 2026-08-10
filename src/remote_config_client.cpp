@@ -495,6 +495,10 @@ MergedConfigResult FetchMergedConfig(const std::wstring& baseUrl,
     JsonGetInt(configObj, L"refreshMode", res.config.refreshMode);
     JsonGetInt(configObj, L"refreshIntervalSec", res.config.refreshIntervalSec);
     JsonGetInt(configObj, L"refreshDailyMin", res.config.refreshDailyMin);
+    std::wstring refreshTimes;
+    if (JsonGetString(configObj, L"refreshTimes", refreshTimes)) {
+        wcsncpy_s(res.config.refreshTimes, refreshTimes.c_str(), _TRUNCATE);
+    }
     JsonGetBool(configObj, L"burnInPrevention", res.config.burnInPrevention);
     JsonGetBool(configObj, L"allowRemotePasswordUpdate", res.config.allowRemotePasswordUpdate);
 

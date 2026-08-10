@@ -26,6 +26,70 @@ struct AppConfigV3 {
     bool burnInPrevention = false;
 };
 
+// v4 persisted layout kept for backward-compatible migration into v5 AppConfig.
+struct AppConfigV4 {
+    wchar_t url[2048] = {};
+    wchar_t encryptedPassword[512] = {};
+    wchar_t unreachableMsg[1024] = {};
+    int zoomPercent = AppConstants::ZOOM_DEFAULT;
+    int refreshMode = AppConstants::REFRESH_MODE_DEFAULT;
+    int refreshIntervalSec = AppConstants::REFRESH_INTERVAL_DEFAULT;
+    int refreshDailyMin = AppConstants::REFRESH_DAILY_DEFAULT;
+    bool burnInPrevention = false;
+    bool remoteEnabled = false;
+    wchar_t remoteBaseUrl[1024] = {};
+    wchar_t deviceId[128] = {};
+    int configRevision = 0;
+    bool allowRemotePasswordUpdate = false;
+    int pollBaseSec = AppConstants::REMOTE_POLL_BASE_SEC_DEFAULT;
+    int pollJitterSec = AppConstants::REMOTE_POLL_JITTER_SEC_DEFAULT;
+    int pollMaxBackoffSec = AppConstants::REMOTE_POLL_MAX_BACKOFF_SEC_DEFAULT;
+};
+
+// v5 persisted layout kept for backward-compatible migration into v6 AppConfig.
+struct AppConfigV5 {
+    wchar_t url[2048] = {};
+    wchar_t encryptedPassword[512] = {};
+    wchar_t unreachableMsg[1024] = {};
+    int zoomPercent = AppConstants::ZOOM_DEFAULT;
+    int refreshMode = AppConstants::REFRESH_MODE_DEFAULT;
+    int refreshIntervalSec = AppConstants::REFRESH_INTERVAL_DEFAULT;
+    int refreshDailyMin = AppConstants::REFRESH_DAILY_DEFAULT;
+    bool burnInPrevention = false;
+    bool autoStart = false;
+    bool remoteEnabled = false;
+    wchar_t remoteBaseUrl[1024] = {};
+    wchar_t deviceId[128] = {};
+    int configRevision = 0;
+    bool allowRemotePasswordUpdate = false;
+    int pollBaseSec = AppConstants::REMOTE_POLL_BASE_SEC_DEFAULT;
+    int pollJitterSec = AppConstants::REMOTE_POLL_JITTER_SEC_DEFAULT;
+    int pollMaxBackoffSec = AppConstants::REMOTE_POLL_MAX_BACKOFF_SEC_DEFAULT;
+};
+
+// v6 persisted layout kept for backward-compatible migration into v7 AppConfig.
+// Matches the pre-v7 AppConfig exactly (auto-update fields are v7 additions).
+struct AppConfigV6 {
+    wchar_t url[2048] = {};
+    wchar_t encryptedPassword[512] = {};
+    wchar_t unreachableMsg[1024] = {};
+    int zoomPercent = AppConstants::ZOOM_DEFAULT;
+    int refreshMode = AppConstants::REFRESH_MODE_DEFAULT;
+    int refreshIntervalSec = AppConstants::REFRESH_INTERVAL_DEFAULT;
+    int refreshDailyMin = AppConstants::REFRESH_DAILY_DEFAULT;
+    wchar_t refreshTimes[256] = {};
+    bool burnInPrevention = false;
+    bool autoStart = false;
+    bool remoteEnabled = false;
+    wchar_t remoteBaseUrl[1024] = {};
+    wchar_t deviceId[128] = {};
+    int configRevision = 0;
+    bool allowRemotePasswordUpdate = false;
+    int pollBaseSec = AppConstants::REMOTE_POLL_BASE_SEC_DEFAULT;
+    int pollJitterSec = AppConstants::REMOTE_POLL_JITTER_SEC_DEFAULT;
+    int pollMaxBackoffSec = AppConstants::REMOTE_POLL_MAX_BACKOFF_SEC_DEFAULT;
+};
+
 static FILE* OpenFile(const std::wstring& path, const wchar_t* mode)
 {
     FILE* file = nullptr;
@@ -154,6 +218,85 @@ bool LoadConfig(AppConfig& config)
         config.refreshIntervalSec = oldCfg.refreshIntervalSec;
         config.refreshDailyMin = oldCfg.refreshDailyMin;
         config.burnInPrevention = oldCfg.burnInPrevention;
+    } else if (version == 5) {
+        // Migrate v5 layout into v6 (refreshTimes defaults to empty list).
+        AppConfigV5 oldCfg = {};
+        if (fread(&oldCfg, sizeof(oldCfg), 1, f) != 1) {
+            fclose(f);
+            return false;
+        }
+
+        config = AppConfig{};
+        wcsncpy_s(config.url, oldCfg.url, _TRUNCATE);
+        wcsncpy_s(config.encryptedPassword, oldCfg.encryptedPassword, _TRUNCATE);
+        wcsncpy_s(config.unreachableMsg, oldCfg.unreachableMsg, _TRUNCATE);
+        config.zoomPercent = oldCfg.zoomPercent;
+        config.refreshMode = oldCfg.refreshMode;
+        config.refreshIntervalSec = oldCfg.refreshIntervalSec;
+        config.refreshDailyMin = oldCfg.refreshDailyMin;
+        config.burnInPrevention = oldCfg.burnInPrevention;
+        config.autoStart = oldCfg.autoStart;
+        config.remoteEnabled = oldCfg.remoteEnabled;
+        wcsncpy_s(config.remoteBaseUrl, oldCfg.remoteBaseUrl, _TRUNCATE);
+        wcsncpy_s(config.deviceId, oldCfg.deviceId, _TRUNCATE);
+        config.configRevision = oldCfg.configRevision;
+        config.allowRemotePasswordUpdate = oldCfg.allowRemotePasswordUpdate;
+        config.pollBaseSec = oldCfg.pollBaseSec;
+        config.pollJitterSec = oldCfg.pollJitterSec;
+        config.pollMaxBackoffSec = oldCfg.pollMaxBackoffSec;
+    } else if (version == 6) {
+        // Migrate v6 layout into v7 (auto-update fields default off / self-hosted).
+        AppConfigV6 oldCfg = {};
+        if (fread(&oldCfg, sizeof(oldCfg), 1, f) != 1) {
+            fclose(f);
+            return false;
+        }
+
+        config = AppConfig{};
+        wcsncpy_s(config.url, oldCfg.url, _TRUNCATE);
+        wcsncpy_s(config.encryptedPassword, oldCfg.encryptedPassword, _TRUNCATE);
+        wcsncpy_s(config.unreachableMsg, oldCfg.unreachableMsg, _TRUNCATE);
+        config.zoomPercent = oldCfg.zoomPercent;
+        config.refreshMode = oldCfg.refreshMode;
+        config.refreshIntervalSec = oldCfg.refreshIntervalSec;
+        config.refreshDailyMin = oldCfg.refreshDailyMin;
+        wcsncpy_s(config.refreshTimes, oldCfg.refreshTimes, _TRUNCATE);
+        config.burnInPrevention = oldCfg.burnInPrevention;
+        config.autoStart = oldCfg.autoStart;
+        config.remoteEnabled = oldCfg.remoteEnabled;
+        wcsncpy_s(config.remoteBaseUrl, oldCfg.remoteBaseUrl, _TRUNCATE);
+        wcsncpy_s(config.deviceId, oldCfg.deviceId, _TRUNCATE);
+        config.configRevision = oldCfg.configRevision;
+        config.allowRemotePasswordUpdate = oldCfg.allowRemotePasswordUpdate;
+        config.pollBaseSec = oldCfg.pollBaseSec;
+        config.pollJitterSec = oldCfg.pollJitterSec;
+        config.pollMaxBackoffSec = oldCfg.pollMaxBackoffSec;
+        // autoUpdate stays false (v7 default): updates require explicit opt-in.
+    } else if (version == 4) {
+        // Migrate v4 layout into v5 in-memory config (autoStart defaults to off).
+        AppConfigV4 oldCfg = {};
+        if (fread(&oldCfg, sizeof(oldCfg), 1, f) != 1) {
+            fclose(f);
+            return false;
+        }
+
+        config = AppConfig{};
+        wcsncpy_s(config.url, oldCfg.url, _TRUNCATE);
+        wcsncpy_s(config.encryptedPassword, oldCfg.encryptedPassword, _TRUNCATE);
+        wcsncpy_s(config.unreachableMsg, oldCfg.unreachableMsg, _TRUNCATE);
+        config.zoomPercent = oldCfg.zoomPercent;
+        config.refreshMode = oldCfg.refreshMode;
+        config.refreshIntervalSec = oldCfg.refreshIntervalSec;
+        config.refreshDailyMin = oldCfg.refreshDailyMin;
+        config.burnInPrevention = oldCfg.burnInPrevention;
+        config.remoteEnabled = oldCfg.remoteEnabled;
+        wcsncpy_s(config.remoteBaseUrl, oldCfg.remoteBaseUrl, _TRUNCATE);
+        wcsncpy_s(config.deviceId, oldCfg.deviceId, _TRUNCATE);
+        config.configRevision = oldCfg.configRevision;
+        config.allowRemotePasswordUpdate = oldCfg.allowRemotePasswordUpdate;
+        config.pollBaseSec = oldCfg.pollBaseSec;
+        config.pollJitterSec = oldCfg.pollJitterSec;
+        config.pollMaxBackoffSec = oldCfg.pollMaxBackoffSec;
     } else {
         fclose(f);
         return false;
@@ -187,13 +330,6 @@ bool SaveConfig(const AppConfig& config, std::wstring_view plainPassword)
 
     fclose(f);
     return ok;
-}
-
-bool DeleteConfig()
-{
-    std::wstring path = GetConfigFilePath();
-    if (path.empty()) return false;
-    return DeleteFileW(path.c_str()) != 0;
 }
 
 bool SaveRemoteToken(std::wstring_view token)
@@ -262,13 +398,6 @@ bool LoadRemoteToken(std::wstring& token)
     token.assign(data, data + chars);
     LocalFree(outBlob.pbData);
     return !token.empty();
-}
-
-bool DeleteRemoteToken()
-{
-    std::wstring path = GetRemoteTokenPath();
-    if (path.empty()) return false;
-    return DeleteFileW(path.c_str()) != 0;
 }
 
 bool LoadConsumedCommandIds(std::vector<std::wstring>& commandIds)

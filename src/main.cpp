@@ -31,6 +31,7 @@
 #include "url_monitor.h"
 #include "dialogs.h"
 #include "remote_config_client.h"
+#include "auto_update.h"
 
 // ============================================================
 // Application State
@@ -48,10 +49,13 @@ struct AppState {
     std::wstring lastRemoteError;
     unsigned int remotePollDelayMs = 0;
     int remoteFailureCount = 0;
+    bool needsUpdateConfirm = false; // an applied update awaits confirmation
     std::vector<std::wstring> consumedCommandIds;
 };
 
 inline constexpr UINT_PTR TIMER_REMOTE_CONFIG = 5005;
+inline constexpr UINT_PTR TIMER_AUTO_UPDATE = 5006;
+inline constexpr UINT_PTR TIMER_UPDATE_CONFIRM = 5007;
 
 static AppState g_state;
 
@@ -70,6 +74,7 @@ static void RememberConsumedCommandId(std::wstring_view commandId);
 static void OnUrlReachabilityChanged(bool reachable);
 static void SafeWipePassword();
 static void OnWebViewInitError(const wchar_t* errorMsg);
+static void ShutdownForUpdate();
 
 // ============================================================
 // WinMain
@@ -100,6 +105,18 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
         CoUninitialize();
         return 0;
     }
+
+    // --- Auto-update startup recovery (roll back a crashing new exe, or
+    // retry an interrupted replacement). If it says to exit, the mutex was
+    // relaunched into a fresh process; leave now. ---
+    auto startupRecovery = AutoUpdate::HandleStartupRecovery();
+    if (startupRecovery == AutoUpdate::StartupResult::RolledBackRestarted) {
+        CloseHandle(hMutex);
+        CoUninitialize();
+        return 0;
+    }
+    g_state.needsUpdateConfirm =
+        (startupRecovery == AutoUpdate::StartupResult::Confirming);
 
     // --- Check configuration ---
     bool hasConfig = ConfigManager::LoadConfig(g_state.config);
@@ -228,7 +245,8 @@ static bool RunFullscreenMode()
     WebViewWindow::StartAutoRefresh(g_state.config.url,
                                      g_state.config.refreshMode,
                                      g_state.config.refreshIntervalSec,
-                                     g_state.config.refreshDailyMin);
+                                     g_state.config.refreshDailyMin,
+                                     g_state.config.refreshTimes);
 
     // --- Start pixel shift (burn-in prevention) if enabled ---
     if (g_state.config.burnInPrevention) {
@@ -239,6 +257,16 @@ static bool RunFullscreenMode()
         ScheduleNextRemotePoll();
     }
 
+    // --- Auto-update timers ---
+    if (g_state.config.autoUpdate) {
+        SetTimer(g_state.hMainWnd, TIMER_AUTO_UPDATE,
+                 AppConstants::UPDATE_INITIAL_DELAY_MS, nullptr);
+    }
+    if (g_state.needsUpdateConfirm) {
+        SetTimer(g_state.hMainWnd, TIMER_UPDATE_CONFIRM,
+                 AppConstants::UPDATE_CONFIRM_SEC * 1000, nullptr);
+    }
+
     // --- Message loop ---
     SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
 
@@ -246,6 +274,21 @@ static bool RunFullscreenMode()
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         if (msg.message == WM_TIMER && msg.wParam == TIMER_REMOTE_CONFIG) {
             PerformRemoteSync(false);
+            continue;
+        }
+        if (msg.message == WM_TIMER && msg.wParam == TIMER_AUTO_UPDATE) {
+            if (AutoUpdate::CheckAndApply(g_state.config) ==
+                AutoUpdate::CheckResult::AppliedRestartNeeded) {
+                ShutdownForUpdate();
+            } else {
+                SetTimer(g_state.hMainWnd, TIMER_AUTO_UPDATE,
+                         AppConstants::UPDATE_POLL_MS, nullptr);
+            }
+            continue;
+        }
+        if (msg.message == WM_TIMER && msg.wParam == TIMER_UPDATE_CONFIRM) {
+            KillTimer(g_state.hMainWnd, TIMER_UPDATE_CONFIRM);
+            AutoUpdate::ConfirmAndCleanup();
             continue;
         }
         TranslateMessage(&msg);
@@ -273,6 +316,25 @@ static void OnWebViewInitError(const wchar_t* errorMsg)
 
     g_state.exiting = true;
     PostQuitMessage(1);
+}
+
+// ============================================================
+// Clean shutdown after staging an auto-update: the detached powershell
+// (launched via -EncodedCommand) swaps the exe once this process has
+// exited, then relaunches.
+// ============================================================
+static void ShutdownForUpdate()
+{
+    if (g_state.exiting) return;
+    g_state.exiting = true;
+    UrlMonitor::Stop();
+    HookManager::UninstallHook();
+    WebViewWindow::Cleanup();
+    if (g_state.hMainWnd) {
+        DestroyWindow(g_state.hMainWnd);
+        g_state.hMainWnd = nullptr;
+    }
+    PostQuitMessage(0);
 }
 
 // ============================================================
@@ -328,6 +390,14 @@ static void OnHotkeyPressed()
 
                 if (g_state.hMainWnd) {
                     KillTimer(g_state.hMainWnd, TIMER_REMOTE_CONFIG);
+                    KillTimer(g_state.hMainWnd, TIMER_AUTO_UPDATE);
+                    KillTimer(g_state.hMainWnd, TIMER_UPDATE_CONFIRM);
+                }
+
+                // Re-arm the update check if auto-update was just enabled.
+                if (g_state.hMainWnd && g_state.config.autoUpdate) {
+                    SetTimer(g_state.hMainWnd, TIMER_AUTO_UPDATE,
+                             AppConstants::UPDATE_INITIAL_DELAY_MS, nullptr);
                 }
 
                 if (g_state.config.remoteEnabled) {
@@ -378,7 +448,8 @@ static void ApplyConfigRuntime(const AppConfig& cfg)
     WebViewWindow::StartAutoRefresh(cfg.url,
                                      cfg.refreshMode,
                                      cfg.refreshIntervalSec,
-                                     cfg.refreshDailyMin);
+                                     cfg.refreshDailyMin,
+                                     cfg.refreshTimes);
 
     WebViewWindow::StopPixelShift();
     if (cfg.burnInPrevention) {
@@ -453,7 +524,7 @@ static bool EnsureRemoteRegistration()
         auto result = RemoteConfigClient::RegisterDevice(g_state.config.remoteBaseUrl,
                                                          g_state.config.deviceId,
                                                          registerCode,
-                                                         L"1.0.0");
+                                                         AutoUpdate::CurrentVersion());
         if (result.ok) {
             g_state.remoteToken = std::move(result.deviceToken);
             g_state.config.pollBaseSec = result.pollBaseSec;
@@ -491,9 +562,12 @@ static void ScheduleNextRemotePoll()
     }
 
     if (g_state.remoteFailureCount > 0) {
-        int backoffSec = baseSec << g_state.remoteFailureCount;
+        // Cap the exponential shift so the backoff can never overflow int
+        // during a long outage (baseSec << count), then clamp to maxBackoffSec.
+        const int shift = g_state.remoteFailureCount < 20 ? g_state.remoteFailureCount : 20;
+        long long backoffSec = static_cast<long long>(baseSec) << shift;
         if (backoffSec > maxBackoffSec) backoffSec = maxBackoffSec;
-        if (delaySec < backoffSec) delaySec = backoffSec;
+        if (delaySec < backoffSec) delaySec = static_cast<int>(backoffSec);
     }
 
     if (delaySec < 1) delaySec = 1;
@@ -574,6 +648,14 @@ static void PerformRemoteSync(bool startupSync)
         result.config.pollJitterSec = g_state.config.pollJitterSec;
         result.config.pollMaxBackoffSec = g_state.config.pollMaxBackoffSec;
 
+        // Auto-update settings are local policy, never overridden by the
+        // remote merged config.
+        result.config.autoUpdate = g_state.config.autoUpdate;
+        result.config.updateSource = g_state.config.updateSource;
+        wcsncpy_s(result.config.updateRepo, g_state.config.updateRepo, _TRUNCATE);
+        wcsncpy_s(result.config.updateBaseUrl, g_state.config.updateBaseUrl, _TRUNCATE);
+        wcsncpy_s(result.config.updateWindow, g_state.config.updateWindow, _TRUNCATE);
+
         g_state.config = result.config;
         if (!startupSync) {
             ApplyConfigRuntime(g_state.config);
@@ -587,16 +669,9 @@ static void PerformRemoteSync(bool startupSync)
                                               L"applied",
                                               passwordCommand,
                                               commandStatus);
-    } else if (passwordCommand != nullptr && !commandStatus.empty()) {
-        RemoteConfigClient::AckAppliedRevision(g_state.config.remoteBaseUrl,
-                                              g_state.config.deviceId,
-                                              g_state.remoteToken,
-                                              g_state.config.configRevision,
-                                              L"success",
-                                              L"command_applied",
-                                              passwordCommand,
-                                              commandStatus);
     }
+    // Note: a notModified response never carries commands (the client returns
+    // early before parsing them), so there is no command ack to send in that case.
 
     if (!startupSync) {
         ScheduleNextRemotePoll();

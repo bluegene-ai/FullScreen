@@ -205,16 +205,13 @@ final class Auth
         return $found;
     }
 
-    public function signPayload(array $payload): string
-    {
-        return $this->signPayloadWithSecret($payload, 'dev-secret');
-    }
-
     public function signPayloadForDevice(string $deviceId, array $payload): string
     {
         $secret = $this->getDeviceTokenHash($deviceId);
         if ($secret === '') {
-            return $this->signPayload($payload);
+            // No registered token hash for this device: cannot sign. Fail
+            // closed instead of falling back to a hardcoded shared secret.
+            return '';
         }
         return $this->signPayloadWithSecret($payload, $secret);
     }
@@ -222,7 +219,7 @@ final class Auth
     private function signPayloadWithSecret(array $payload, string $secret): string
     {
         if ($secret === '') {
-            $secret = 'dev-secret';
+            return '';
         }
 
         $copy = $payload;
